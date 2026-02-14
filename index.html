@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>web-druid</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-left">
+                <div class="title-pill">
+                    <h1>//// web-druid</h1>
+                </div>
+            </div>
+            <div class="header-right">
+                <button id="scriptReferenceBtn" class="repl-connection-btn">documentation</button>
+                <a class="repl-connection-btn source-link" href="https://github.com/dessertplanet/web-druid" target="_blank" rel="noopener noreferrer">source</a>
+            </div>
+        </header>
+
+        <div class="workspace">
+            <div class="split-container" id="splitContainer">
+                <div class="repl-pane full-width" id="replPane">
+                    <div class="repl-content">
+                        <div id="output" class="repl-output"></div>
+                        <div class="stream-monitors">
+                            <div class="stream-monitor" id="streamMonitor1">
+                                <div class="stream-monitor-header">input[1]</div>
+                                <canvas class="stream-monitor-canvas" id="streamCanvas1" width="200" height="60"></canvas>
+                                <div class="stream-monitor-value" id="streamValue1">---</div>
+                            </div>
+                            <div class="stream-monitor" id="streamMonitor2">
+                                <div class="stream-monitor-header">input[2]</div>
+                                <canvas class="stream-monitor-canvas" id="streamCanvas2" width="200" height="60"></canvas>
+                                <div class="stream-monitor-value" id="streamValue2">---</div>
+                            </div>
+                        </div>
+                        <div class="repl-actions">
+                            <div class="repl-status-pill">
+                                <span id="replStatusIndicator" class="repl-status-indicator"></span>
+                                <span id="replStatusText" class="repl-status-text">not connected</span>
+                            </div>
+                            <button id="replConnectionBtn" class="repl-connection-btn">connect</button>
+                            <button id="resetBtn" class="repl-action-btn">reset</button>
+                            <button id="helpBtn" class="repl-action-btn">help</button>
+                            <button id="clearBtn" class="repl-action-btn">cleanup</button>
+                            <div class="repl-actions-spacer"></div>
+                        </div>
+                        <div class="repl-input-container">
+                            <textarea id="replInput" class="repl-input" placeholder="send word to the bird"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <input type="file" id="fileInput" accept=".lua" style="display: none;">
+    </div>
+
+    <div id="browserWarning" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h2>Browser Not Supported</h2>
+            <p>This application requires the Web Serial API, which is only available in Chromium-based browsers.</p>
+            <p>Please use Chrome, Edge, or Opera.</p>
+            <button id="closeWarning" class="modal-btn">Close</button>
+        </div>
+    </div>
+
+    <script src="druid.js"></script>
+</body>
+</html>
