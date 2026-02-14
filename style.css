@@ -215,8 +215,7 @@ body {
 }
 
 .repl-connection-btn:hover,
-.repl-action-btn:hover,
-.source-link:hover {
+.repl-action-btn:hover {
     color: var(--interactive-selected);
     border-color: var(--interactive-medium);
 }

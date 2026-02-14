@@ -1,9 +1,9 @@
 /**
- * web-druid REPL-only app
- * Minimal serial REPL + script browser for crow/blackbird.
+ * web-diii REPL-only app
+ * Minimal serial REPL + script browser iii devices.
  */
 
-class CrowConnection {
+class iiiConnection {
     constructor() {
         this.port = null;
         this.reader = null;
@@ -20,7 +20,7 @@ class CrowConnection {
     async connect() {
         try {
             this.port = await navigator.serial.requestPort({
-                filters: [{ usbVendorId: 0x0483, usbProductId: 0x5740 }]
+                filters: [{ usbVendorId: 0xCAFE, usbProductId: 0x1101 }]
             });
 
             await this.port.open({
@@ -117,7 +117,7 @@ class CrowConnection {
     }
 
     async writeLine(line) {
-        await this.write(`${line}\r\n`);
+        await this.write(`${line}\n`);
     }
 
     async disconnect() {
@@ -148,7 +148,7 @@ class CrowConnection {
 
 class DruidApp {
     constructor() {
-        this.crow = new CrowConnection();
+        this.iiiDevice = new iiiConnection();
 
         this.commandHistory = [];
         this.historyIndex = -1;
@@ -162,7 +162,7 @@ class DruidApp {
         this.checkBrowserSupport();
         this.startStreamAnimation();
 
-        this.outputLine('//// welcome. connect to crow or blackbird to begin.');
+        this.outputLine('//// welcome. connect to an iii compatible grid or arc to begin.');
     }
 
     cacheElements() {
@@ -176,7 +176,7 @@ class DruidApp {
             output: document.getElementById('output'),
             replInput: document.getElementById('replInput'),
             replPane: document.getElementById('replPane'),
-            resetBtn: document.getElementById('resetBtn'),
+            restartBtn: document.getElementById('restartBtn'),
             helpBtn: document.getElementById('helpBtn'),
             clearBtn: document.getElementById('clearBtn'),
 
@@ -204,7 +204,7 @@ class DruidApp {
 
         on(this.elements.connectionBtn, 'click', () => this.toggleConnection());
         on(this.elements.replInput, 'keydown', (e) => this.handleReplInput(e));
-        on(this.elements.resetBtn, 'click', () => this.resetCrow());
+        on(this.elements.restartBtn, 'click', () => this.restartDevice());
         on(this.elements.helpBtn, 'click', () => this.showHelp());
         on(this.elements.clearBtn, 'click', () => this.clearOutput());
 
@@ -213,11 +213,11 @@ class DruidApp {
         });
 
         on(this.elements.scriptReferenceBtn, 'click', () => {
-            window.open('https://monome.org/docs/crow/reference', '_blank');
+            window.open('https://monome.org/docs/iii/', '_blank');
         });
 
-        this.crow.onDataReceived = (data) => this.handleCrowOutput(data);
-        this.crow.onConnectionChange = (connected, error) => this.handleConnectionChange(connected, error);
+        this.iiiDevice.onDataReceived = (data) => this.handleiiiOutput(data);
+        this.iiiDevice.onConnectionChange = (connected, error) => this.handleConnectionChange(connected, error);
 
         this.setupDragAndDrop();
     }
@@ -323,8 +323,8 @@ class DruidApp {
             this.commandHistory.push(code);
         }
 
-        if (!this.crow.isConnected) {
-            this.outputLine('crow is not connected');
+        if (!this.iiiDevice.isConnected) {
+            this.outputLine('no iii device connected.');
             this.elements.replInput.value = '';
             this.historyIndex = -1;
             this.currentInput = '';
@@ -333,7 +333,7 @@ class DruidApp {
 
         try {
             for (const line of code.split('\n')) {
-                await this.crow.writeLine(line);
+                await this.iiiDevice.writeLine(line);
                 await this.delay(1);
             }
             this.elements.replInput.value = '';
@@ -345,7 +345,7 @@ class DruidApp {
     }
 
     async toggleConnection() {
-        if (this.crow.isConnected) {
+        if (this.iiiDevice.isConnected) {
             await this.disconnect();
             return;
         }
@@ -353,8 +353,8 @@ class DruidApp {
     }
 
     async connect() {
-        this.outputLine('Connecting to crow...');
-        const connected = await this.crow.connect();
+        this.outputLine('Connecting to iii device...');
+        const connected = await this.iiiDevice.connect();
         if (connected) {
             this.outputLine('Connected! Ready to code.');
             this.outputLine('Drag and drop a lua file here to auto-upload.');
@@ -363,9 +363,9 @@ class DruidApp {
     }
 
     async disconnect() {
-        await this.crow.disconnect();
+        await this.iiiDevice.disconnect();
         this.outputLine('');
-        this.outputLine('Disconnected from crow.');
+        this.outputLine('Disconnected from iii device.');
         this.outputLine('');
     }
 
@@ -390,7 +390,7 @@ class DruidApp {
         }
     }
 
-    handleCrowOutput(data) {
+    handleiiiOutput(data) {
         const cleaned = String(data).replace(/\r/g, '');
         if (!cleaned) return;
 
@@ -418,11 +418,11 @@ class DruidApp {
                 ? eventMatch[2].split(',').map((item) => item.trim())
                 : [];
 
-            this.handleCrowEvent(event, args);
+            this.handleiiiEvent(event, args);
         }
     }
 
-    handleCrowEvent(event, args) {
+    handleiiiEvent(event, args) {
         if (event === 'pubview' || event === 'pupdate') {
             return;
         }
@@ -539,29 +539,29 @@ class DruidApp {
             .map((line) => line.replace(/\s+$/g, ''));
     }
 
-    async sendScriptTextToCrow(text, endMarker = '^^w') {
+    async sendScriptTextToiii(text, endMarker = '^^w') {
         const lines = this.getUploadLines(text);
-        await this.crow.write('^^s');
+        await this.iiiDevice.writeLine('^^s');
         await this.delay(200);
 
         for (const line of lines) {
-            await this.crow.writeLine(line);
+            await this.iiiDevice.writeLine(line);
             await this.delay(1);
         }
 
         await this.delay(100);
-        await this.crow.write(endMarker);
+        await this.iiiDevice.writeLine(endMarker);
     }
 
     async uploadTextAsScript(name, text) {
-        if (!this.crow.isConnected) {
+        if (!this.iiiDevice.isConnected) {
             this.outputLine('Error: Not connected to usb device (click connect in the header)');
             return;
         }
 
         try {
             this.outputLine(`Uploading ${name}...`);
-            await this.sendScriptTextToCrow(text, '^^w');
+            await this.sendScriptTextToiii(text, '^^w');
         } catch (error) {
             this.outputLine(`Upload error: ${error.message}`);
         }
@@ -604,31 +604,27 @@ class DruidApp {
         });
     }
 
-    resetCrow() {
-        if (!this.crow.isConnected) {
+    restartDevice() {
+        if (!this.iiiDevice.isConnected) {
             this.outputLine('Error: Not connected to usb device');
             return;
         }
-        this.outputLine('> crow.reset()');
-        this.crow.writeLine('crow.reset()');
+        this.outputLine('> ^^r');
+        this.iiiDevice.writeLine('^^r');
         this.hideStreamMonitors();
     }
 
     showHelp() {
         this.outputLine('');
-        this.outputLine(' crow commands:');
-        this.outputLine(' ^^i          print identity');
-        this.outputLine(' ^^v          print version');
-        this.outputLine(' ^^p          print current userscript');
-        this.outputLine(' ^^r          restart crow');
-        this.outputLine(' ^^k          kill running script');
-        this.outputLine(' ^^c          clear userscript from flash');
-        this.outputLine(' ^^b          enter bootloader mode');
+        this.outputLine(' iii commands:');
+        this.outputLine(' ^^p         print script');
+        this.outputLine(' ^^c         clear script');
+        this.outputLine(' ^^z         reboot script');
+        this.outputLine(' ^^r         reboot device');
+        this.outputLine(' ^^b         reboot into bootloader mode');
         this.outputLine('');
-        this.outputHTML(' crow script reference: <a href="https://monome.org/docs/crow/reference" target="_blank">https://monome.org/docs/crow/reference</a>\n');
-        this.outputLine('');
-        this.outputHTML(' blackbird addendum: <a href="https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/41_blackbird/README.md" target="_blank">https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/41_blackbird/README.md</a>\n');
-        this.outputLine('');
+        this.outputHTML('TODO: iii script reference link GOES HERE');
+       
     }
 
     delay(ms) {
