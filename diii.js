@@ -156,6 +156,7 @@ class DruidApp {
         this.pendingLuaCapture = null;
         this.pendingFilenameCapture = null;
         this.activeFileName = null;
+        this.reconnectAfterRestartTimer = null;
         this.fileEntries = [];
         this.openMenuFile = null;
         this.isExplorerCollapsed = true;
@@ -179,6 +180,7 @@ class DruidApp {
             explorerChevron: document.getElementById('explorerChevron'),
 
             connectionBtn: document.getElementById('replConnectionBtn'),
+            replStatusPill: document.getElementById('replStatusPill'),
             replStatusIndicator: document.getElementById('replStatusIndicator'),
             replStatusText: document.getElementById('replStatusText'),
 
@@ -204,6 +206,7 @@ class DruidApp {
         };
 
         on(this.elements.connectionBtn, 'click', () => this.toggleConnection());
+        on(this.elements.replStatusPill, 'click', () => this.toggleConnection());
         on(this.elements.replInput, 'keydown', (e) => this.handleReplInput(e));
         on(this.elements.toggleExplorerBtn, 'click', () => this.toggleExplorer());
         on(this.elements.uploadBtn, 'click', () => this.openUploadPicker());
@@ -267,6 +270,15 @@ class DruidApp {
         span.innerHTML = html;
         this.elements.output.appendChild(span);
         this.elements.output.scrollTop = this.elements.output.scrollHeight;
+    }
+
+    escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     clearOutput() {
@@ -363,6 +375,7 @@ class DruidApp {
             }
 
             if (shouldRefreshFiles) {
+                this.setExplorerCollapsed(false);
                 await this.delay(150);
                 await this.refreshFileList();
             }
@@ -388,10 +401,33 @@ class DruidApp {
         const connected = await this.iiiDevice.connect();
         if (connected) {
             this.setExplorerCollapsed(false);
-            this.outputLine('Connected! Ready to code.');
+            const deviceType = await this.updateConnectedDeviceLabel();
+            if (deviceType) {
+                this.outputHTML(`<strong>${this.escapeHtml(deviceType)}</strong> connected! Ready to code.\n`);
+            } else {
+                this.outputLine('Connected! Ready to code.');
+            }
             this.outputLine('Drag and drop a lua file here to auto-upload.');
             this.outputLine('');
             await this.refreshFileList();
+        }
+    }
+
+    async updateConnectedDeviceLabel() {
+        if (!this.iiiDevice.isConnected || !this.elements.replStatusText) {
+            return null;
+        }
+
+        try {
+            const lines = await this.executeLuaCapture('print(device_id())');
+            const deviceType = lines.map((line) => String(line).trim()).find((line) => line.length > 0);
+            this.elements.replStatusText.textContent = deviceType
+                ? deviceType
+                : 'connected';
+            return deviceType || null;
+        } catch {
+            this.elements.replStatusText.textContent = 'connected';
+            return null;
         }
     }
 
@@ -964,6 +1000,8 @@ class DruidApp {
                 return;
             }
 
+            this.setExplorerCollapsed(false);
+
             const text = await file.text();
             await this.uploadTextAsScript(file.name, text);
         });
@@ -976,6 +1014,17 @@ class DruidApp {
         }
         this.outputLine('> ^^r');
         this.iiiDevice.writeLine('^^r');
+
+        if (this.reconnectAfterRestartTimer) {
+            clearTimeout(this.reconnectAfterRestartTimer);
+        }
+
+        this.reconnectAfterRestartTimer = setTimeout(async () => {
+            if (!this.iiiDevice.isConnected) {
+                await this.connect();
+            }
+            this.reconnectAfterRestartTimer = null;
+        }, 1000);
     }
 
     bootloaderDevice() {
