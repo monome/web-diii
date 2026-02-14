@@ -437,7 +437,7 @@ class DruidApp {
     }
 
     async sendScriptTextToiii(fileName, text) {
-        const baseName = 'init.lua';
+        const baseName = fileName;
         const lines = this.getUploadLines(text);
 
         // Match diii upload protocol:
