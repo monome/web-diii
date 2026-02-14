@@ -160,6 +160,7 @@ class DruidApp {
         this.toastTimer = null;
         this.toastElement = null;
         this.fileEntries = [];
+        this.fileFreeSpaceBytes = null;
         this.openMenuFile = null;
         this.isExplorerCollapsed = true;
 
@@ -178,6 +179,7 @@ class DruidApp {
 
             fileExplorerPane: document.getElementById('fileExplorerPane'),
             fileList: document.getElementById('fileList'),
+            fileSpaceFooter: document.getElementById('fileSpaceFooter'),
             toggleExplorerBtn: document.getElementById('toggleExplorerBtn'),
             explorerChevron: document.getElementById('explorerChevron'),
 
@@ -210,6 +212,7 @@ class DruidApp {
         on(this.elements.connectionBtn, 'click', () => this.toggleConnection());
         on(this.elements.replStatusPill, 'click', () => this.toggleConnection());
         on(this.elements.replInput, 'keydown', (e) => this.handleReplInput(e));
+        on(document, 'keydown', (e) => this.handleGlobalShortcuts(e));
         on(this.elements.toggleExplorerBtn, 'click', () => this.toggleExplorer());
         on(this.elements.uploadBtn, 'click', () => this.openUploadPicker());
         on(this.elements.restartBtn, 'click', () => this.restartDevice());
@@ -343,6 +346,20 @@ class DruidApp {
         }
     }
 
+    handleGlobalShortcuts(event) {
+        if (event.defaultPrevented) return;
+
+        const isConnectToggle = (event.metaKey || event.ctrlKey)
+            && event.shiftKey
+            && !event.altKey
+            && String(event.key).toLowerCase() === 'c';
+
+        if (!isConnectToggle) return;
+
+        event.preventDefault();
+        this.toggleConnection();
+    }
+
     navigateReplHistory(direction) {
         const input = this.elements.replInput;
         if (!input || this.commandHistory.length === 0) return;
@@ -373,6 +390,7 @@ class DruidApp {
         const containsFsRunFile = /\bfs_run_file\s*\(/.test(code);
         const containsFsRemoveFile = /\bfs_remove_file\s*\(/.test(code);
         const containsFsReformat = /\bfs_reformat\s*\(/.test(code);
+        const containsCleanCommand = /(?:^|\s)\^\^c(?:\s|$)/i.test(code);
         const shouldAutoOpenExplorer = containsFsRunFile || containsFsRemoveFile || containsFsReformat;
 
         if (this.commandHistory.length === 0 || this.commandHistory[this.commandHistory.length - 1] !== code) {
@@ -425,6 +443,11 @@ class DruidApp {
             if (containsFsCommand) {
                 await this.delay(150);
                 await this.refreshFileList();
+            }
+
+            if (containsCleanCommand) {
+                this.activeFileName = null;
+                this.renderFileList();
             }
 
             this.elements.replInput.value = '';
@@ -484,7 +507,9 @@ class DruidApp {
         this.outputLine('Disconnected from iii device.');
         this.outputLine('');
         this.activeFileName = null;
+        this.fileFreeSpaceBytes = null;
         this.fileEntries = [];
+        this.updateFileSpaceFooter(null);
         this.renderFileList();
     }
 
@@ -560,6 +585,18 @@ class DruidApp {
     formatSizeKb(bytes) {
         const kb = (Number(bytes) || 0) / 1024;
         return `${Math.round(kb)}kb`;
+    }
+
+    updateFileSpaceFooter(bytes) {
+        if (!this.elements.fileSpaceFooter) return;
+
+        if (!Number.isFinite(Number(bytes))) {
+            this.elements.fileSpaceFooter.textContent = 'free space: -- kb';
+            return;
+        }
+
+        const kb = Math.round(Number(bytes) / 1024);
+        this.elements.fileSpaceFooter.textContent = `free space: ${kb} kb`;
     }
 
     isInitFile(name) {
@@ -648,8 +685,10 @@ class DruidApp {
         }
 
         try {
+            this.setExplorerCollapsed(false);
             const text = await file.text();
             await this.uploadTextAsScript(file.name, text);
+            await this.runFile(file.name);
         } catch (error) {
             this.outputLine(`Upload error: ${error.message}`);
         }
@@ -892,17 +931,24 @@ class DruidApp {
     async refreshFileList() {
         if (!this.iiiDevice.isConnected) {
             this.fileEntries = [];
+            this.fileFreeSpaceBytes = null;
+            this.updateFileSpaceFooter(null);
             this.renderFileList();
             return;
         }
 
         try {
             const lines = await this.executeLuaCapture(
-                'for _, __name in ipairs(fs_list_files()) do local __size = fs_file_size(__name) or 0; print("__webdiii_file\\t" .. __name .. "\\t" .. tostring(__size)) end'
+                'local __free = fs_free_space() or 0; print("__webdiii_free\\t" .. tostring(__free)); for _, __name in ipairs(fs_list_files()) do local __size = fs_file_size(__name) or 0; print("__webdiii_file\\t" .. __name .. "\\t" .. tostring(__size)) end'
             );
 
             const entries = [];
             for (const line of lines) {
+                if (line.startsWith('__webdiii_free\t')) {
+                    const freeRaw = line.split('\t')[1];
+                    this.fileFreeSpaceBytes = Number.parseInt(freeRaw, 10);
+                    continue;
+                }
                 if (!line.startsWith('__webdiii_file\t')) continue;
                 const parts = line.split('\t');
                 if (parts.length < 3) continue;
@@ -919,8 +965,11 @@ class DruidApp {
                 this.activeFileName = null;
             }
 
+            this.updateFileSpaceFooter(this.fileFreeSpaceBytes);
             this.renderFileList();
         } catch (error) {
+            this.fileFreeSpaceBytes = null;
+            this.updateFileSpaceFooter(null);
             this.outputLine(`File list error: ${error.message}`);
         }
     }
@@ -1051,6 +1100,7 @@ class DruidApp {
 
             const text = await file.text();
             await this.uploadTextAsScript(file.name, text);
+            await this.runFile(file.name);
         });
     }
 

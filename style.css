@@ -173,7 +173,8 @@ body {
 .file-explorer-pane.collapsed .file-list,
 .file-explorer-pane.collapsed .file-list-empty,
 .file-explorer-pane.collapsed .file-list-separator,
-.file-explorer-pane.collapsed .file-row {
+.file-explorer-pane.collapsed .file-row,
+.file-explorer-pane.collapsed .file-space-footer {
     display: none;
 }
 
@@ -186,6 +187,14 @@ body {
     flex: 1;
     overflow-y: auto;
     padding: 6px;
+}
+
+.file-space-footer {
+    border-top: 1px solid var(--neutral-trim);
+    padding: 8px 10px;
+    font-size: 0.78rem;
+    color: var(--neutral-medium);
+    text-transform: lowercase;
 }
 
 .file-list-empty {
@@ -374,6 +383,12 @@ body {
     border-radius: 999px;
     padding: 6px 10px;
     cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.repl-status-pill:hover {
+    color: var(--interactive-selected);
+    border-color: var(--interactive-medium);
 }
 
 .header-left .repl-status-pill {
