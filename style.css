@@ -121,45 +121,6 @@ body {
     color: var(--accent-hover);
 }
 
-.stream-monitors {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    padding: 0 12px 12px;
-}
-
-.stream-monitor {
-    background-color: var(--bg-surface);
-    border: 1px solid var(--neutral-trim);
-    border-radius: 8px;
-    padding: 8px;
-    display: none;
-}
-
-.stream-monitor.active {
-    display: block;
-}
-
-.stream-monitor-header {
-    font-size: 0.75rem;
-    color: var(--neutral-medium);
-    margin-bottom: 6px;
-}
-
-.stream-monitor-canvas {
-    width: 100%;
-    height: 60px;
-    display: block;
-    background-color: var(--bg-subdued);
-    border-radius: 4px;
-}
-
-.stream-monitor-value {
-    margin-top: 6px;
-    font-size: 0.8rem;
-    color: var(--interactive-selected);
-}
-
 .repl-actions {
     display: flex;
     align-items: center;
