@@ -386,6 +386,8 @@ class DruidApp {
 
     async sendReplCommand(code) {
         this.outputLine(`>> ${code}`);
+        const isHelpShortcut = /^h$/i.test(code.trim());
+        const isUploadShortcut = /^u$/i.test(code.trim());
         const containsFsCommand = /\bfs_[a-zA-Z0-9_]*\b/.test(code);
         const containsFsRunFile = /\bfs_run_file\s*\(/.test(code);
         const containsFsRemoveFile = /\bfs_remove_file\s*\(/.test(code);
@@ -395,6 +397,22 @@ class DruidApp {
 
         if (this.commandHistory.length === 0 || this.commandHistory[this.commandHistory.length - 1] !== code) {
             this.commandHistory.push(code);
+        }
+
+        if (isHelpShortcut) {
+            this.showHelp();
+            this.elements.replInput.value = '';
+            this.historyIndex = -1;
+            this.currentInput = '';
+            return;
+        }
+
+        if (isUploadShortcut) {
+            this.openUploadPicker();
+            this.elements.replInput.value = '';
+            this.historyIndex = -1;
+            this.currentInput = '';
+            return;
         }
 
         if (!this.iiiDevice.isConnected) {
@@ -1154,16 +1172,19 @@ class DruidApp {
 
     showHelp() {
         this.outputLine('');
-        this.outputLine(' iii commands:');
-        this.outputLine(' ^^s <name>  select file (sends ^^s, name, ^^f)');
-        this.outputLine(' ^^p         print script');
-        this.outputLine(' ^^c         clear script');
-        this.outputLine(' ^^z         reboot script');
-        this.outputLine(' ^^r         reboot device');
-        this.outputLine(' ^^b         reboot into bootloader mode');
-        this.outputLine(' fs_reformat() reformat filesystem');
+        this.outputLine(' web-diii helpers:');
+        this.outputLine(' h            show this help');
+        this.outputLine(' u            open file picker (same as upload button)');
+        this.outputLine(' Cmd/Ctrl+Shift+C  connect/disconnect');
         this.outputLine('');
-        this.outputHTML('TODO: iii script reference link GOES HERE');
+        this.outputLine(' common iii commands:');
+        this.outputLine(' ^^p          print active script');
+        this.outputLine(' ^^c          clear active script');
+        this.outputLine(' ^^r          reboot device');
+        this.outputLine(' ^^b          reboot into bootloader mode');
+        this.outputLine(' ^^g          print name of active script');
+        this.outputLine('');
+        this.outputHTML('Docs: <a href="https://monome.org/docs/iii/" target="_blank" rel="noopener noreferrer">monome.org/docs/iii</a>\n');
        
     }
 
