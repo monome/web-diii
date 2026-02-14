@@ -153,10 +153,14 @@ class DruidApp {
         this.commandHistory = [];
         this.historyIndex = -1;
         this.currentInput = '';
+        this.pendingLuaCapture = null;
+        this.fileEntries = [];
+        this.openMenuFile = null;
 
         this.cacheElements();
         this.bindEvents();
         this.checkBrowserSupport();
+        this.renderFileList();
 
         this.outputLine('//// welcome. connect to an iii compatible grid or arc to begin.');
     }
@@ -164,6 +168,10 @@ class DruidApp {
     cacheElements() {
         this.elements = {
             scriptReferenceBtn: document.getElementById('scriptReferenceBtn'),
+
+            fileExplorerPane: document.getElementById('fileExplorerPane'),
+            fileList: document.getElementById('fileList'),
+            refreshFilesBtn: document.getElementById('refreshFilesBtn'),
 
             connectionBtn: document.getElementById('replConnectionBtn'),
             replStatusIndicator: document.getElementById('replStatusIndicator'),
@@ -191,11 +199,13 @@ class DruidApp {
 
         on(this.elements.connectionBtn, 'click', () => this.toggleConnection());
         on(this.elements.replInput, 'keydown', (e) => this.handleReplInput(e));
+        on(this.elements.refreshFilesBtn, 'click', () => this.refreshFileList());
         on(this.elements.uploadBtn, 'click', () => this.openUploadPicker());
         on(this.elements.restartBtn, 'click', () => this.restartDevice());
         on(this.elements.helpBtn, 'click', () => this.showHelp());
         on(this.elements.clearBtn, 'click', () => this.clearOutput());
         on(this.elements.fileInput, 'change', (e) => this.handleFileSelect(e));
+        on(document, 'click', (e) => this.handleDocumentClick(e));
 
         on(this.elements.closeWarning, 'click', () => {
             this.elements.browserWarning.style.display = 'none';
@@ -351,6 +361,7 @@ class DruidApp {
             this.outputLine('Connected! Ready to code.');
             this.outputLine('Drag and drop a lua file here to auto-upload.');
             this.outputLine('');
+            await this.refreshFileList();
         }
     }
 
@@ -359,6 +370,8 @@ class DruidApp {
         this.outputLine('');
         this.outputLine('Disconnected from iii device.');
         this.outputLine('');
+        this.fileEntries = [];
+        this.renderFileList();
     }
 
     handleConnectionChange(connected, error) {
@@ -385,6 +398,10 @@ class DruidApp {
     handleiiiOutput(data) {
         const cleaned = String(data).replace(/\r/g, '');
         if (!cleaned) return;
+
+        if (this.handleLuaCaptureLine(cleaned)) {
+            return;
+        }
 
         if (!cleaned.includes('^^')) {
             this.outputLine(cleaned);
@@ -465,6 +482,7 @@ class DruidApp {
         try {
             this.outputLine(`Uploading ${name}...`);
             await this.sendScriptTextToiii(name, text);
+            await this.refreshFileList();
         } catch (error) {
             this.outputLine(`Upload error: ${error.message}`);
         }
@@ -490,6 +508,296 @@ class DruidApp {
             await this.uploadTextAsScript(file.name, text);
         } catch (error) {
             this.outputLine(`Upload error: ${error.message}`);
+        }
+    }
+
+    handleDocumentClick(event) {
+        if (!this.openMenuFile) return;
+        if (event.target?.closest('.file-row')) return;
+        this.openMenuFile = null;
+        this.renderFileList();
+    }
+
+    renderFileList() {
+        if (!this.elements.fileList) return;
+
+        this.elements.fileList.textContent = '';
+
+        if (!this.iiiDevice.isConnected) {
+            const empty = document.createElement('div');
+            empty.className = 'file-list-empty';
+            empty.textContent = 'connect to load files';
+            this.elements.fileList.appendChild(empty);
+            return;
+        }
+
+        if (this.fileEntries.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'file-list-empty';
+            empty.textContent = 'no files';
+            this.elements.fileList.appendChild(empty);
+            return;
+        }
+
+        for (const entry of this.fileEntries) {
+            const row = document.createElement('div');
+            row.className = 'file-row';
+
+            const label = document.createElement('div');
+            label.className = 'file-label';
+            label.textContent = `${entry.name} (${entry.size}b)`;
+
+            const menuBtn = document.createElement('button');
+            menuBtn.className = 'file-menu-btn';
+            menuBtn.type = 'button';
+            menuBtn.textContent = '⋮';
+            menuBtn.setAttribute('aria-label', `actions for ${entry.name}`);
+            menuBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this.openMenuFile = this.openMenuFile === entry.name ? null : entry.name;
+                this.renderFileList();
+            });
+
+            const menu = document.createElement('div');
+            menu.className = `file-menu${this.openMenuFile === entry.name ? ' open' : ''}`;
+
+            const actions = [
+                { label: 'make init.lua', fn: () => this.copyToInit(entry.name) },
+                { label: 'download', fn: () => this.downloadFile(entry.name) },
+                { label: 'run', fn: () => this.runFile(entry.name) },
+                { label: 'rename', fn: () => this.renameFile(entry.name) },
+                { label: 'delete', fn: () => this.deleteFile(entry.name) }
+            ];
+
+            for (const action of actions) {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'file-menu-item';
+                item.textContent = action.label;
+                item.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    this.openMenuFile = null;
+                    this.renderFileList();
+                    await action.fn();
+                });
+                menu.appendChild(item);
+            }
+
+            row.appendChild(label);
+            row.appendChild(menuBtn);
+            row.appendChild(menu);
+            this.elements.fileList.appendChild(row);
+        }
+    }
+
+    luaQuote(value) {
+        return `'${String(value)
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'")
+            .replace(/\r/g, '\\r')
+            .replace(/\n/g, '\\n')}'`;
+    }
+
+    handleLuaCaptureLine(line) {
+        const capture = this.pendingLuaCapture;
+        if (!capture) return false;
+
+        if (line === capture.beginToken) {
+            capture.started = true;
+            return true;
+        }
+
+        if (line === capture.endToken) {
+            clearTimeout(capture.timeoutId);
+            const { resolve, lines, error } = capture;
+            this.pendingLuaCapture = null;
+            resolve({ lines, error });
+            return true;
+        }
+
+        if (!capture.started) return false;
+
+        if (line.startsWith('-- lua error:')) {
+            capture.error = line;
+            return true;
+        }
+
+        capture.lines.push(line);
+        return true;
+    }
+
+    async executeLuaCapture(commands) {
+        if (!this.iiiDevice.isConnected) {
+            throw new Error('Not connected to usb device');
+        }
+
+        if (this.pendingLuaCapture) {
+            throw new Error('Device is busy, please try again');
+        }
+
+        const captureId = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+        const beginToken = `__webdiii_begin:${captureId}`;
+        const endToken = `__webdiii_end:${captureId}`;
+
+        const resultPromise = new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                this.pendingLuaCapture = null;
+                reject(new Error('Timed out waiting for device response'));
+            }, 7000);
+
+            this.pendingLuaCapture = {
+                beginToken,
+                endToken,
+                started: false,
+                lines: [],
+                error: null,
+                timeoutId,
+                resolve,
+                reject
+            };
+        });
+
+        await this.iiiDevice.writeLine(`print(${this.luaQuote(beginToken)})`);
+
+        const lines = Array.isArray(commands)
+            ? commands
+            : String(commands).split('\n');
+
+        for (const rawLine of lines) {
+            const line = String(rawLine).trim();
+            if (!line) continue;
+            await this.iiiDevice.writeLine(line);
+        }
+
+        await this.iiiDevice.writeLine(`print(${this.luaQuote(endToken)})`);
+
+        const result = await resultPromise;
+        if (result.error) {
+            throw new Error(result.error);
+        }
+        return result.lines;
+    }
+
+    async refreshFileList() {
+        if (!this.iiiDevice.isConnected) {
+            this.fileEntries = [];
+            this.renderFileList();
+            return;
+        }
+
+        try {
+            const lines = await this.executeLuaCapture(
+                'for _, __name in ipairs(fs_list_files()) do local __size = fs_file_size(__name) or 0; print("__webdiii_file\\t" .. __name .. "\\t" .. tostring(__size)) end'
+            );
+
+            const entries = [];
+            for (const line of lines) {
+                if (!line.startsWith('__webdiii_file\t')) continue;
+                const parts = line.split('\t');
+                if (parts.length < 3) continue;
+                const name = parts[1];
+                const size = Number.parseInt(parts[2], 10) || 0;
+                entries.push({ name, size });
+            }
+
+            entries.sort((a, b) => a.name.localeCompare(b.name));
+            this.fileEntries = entries;
+            this.renderFileList();
+        } catch (error) {
+            this.outputLine(`File list error: ${error.message}`);
+        }
+    }
+
+    async readRemoteFile(fileName) {
+        const lines = await this.executeLuaCapture(
+            `local __webdiii_data = fs_read_file(${this.luaQuote(fileName)}); if __webdiii_data then print(__webdiii_data) end`
+        );
+        return lines.join('\n');
+    }
+
+    async copyToInit(fileName) {
+        try {
+            const content = await this.readRemoteFile(fileName);
+            await this.sendScriptTextToiii('init.lua', content);
+            this.outputLine(`Copied ${fileName} to init.lua`);
+            await this.refreshFileList();
+        } catch (error) {
+            this.outputLine(`Copy error: ${error.message}`);
+        }
+    }
+
+    async downloadFile(fileName) {
+        try {
+            const content = await this.readRemoteFile(fileName);
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            this.outputLine(`Downloaded ${fileName}`);
+        } catch (error) {
+            this.outputLine(`Download error: ${error.message}`);
+        }
+    }
+
+    async runFile(fileName) {
+        try {
+            const lines = await this.executeLuaCapture(`fs_run_file(${this.luaQuote(fileName)})`);
+            for (const line of lines) {
+                this.outputLine(line);
+            }
+            this.outputLine(`Ran ${fileName}`);
+        } catch (error) {
+            this.outputLine(`Run error: ${error.message}`);
+        }
+    }
+
+    normalizeLuaFileName(rawName) {
+        const trimmed = String(rawName || '').trim();
+        if (!trimmed) return '';
+        return trimmed.toLowerCase().endsWith('.lua') ? trimmed : `${trimmed}.lua`;
+    }
+
+    async renameFile(oldName) {
+        const proposed = window.prompt('Rename file', oldName);
+        if (proposed == null) return;
+
+        const newName = this.normalizeLuaFileName(proposed);
+        if (!newName) {
+            this.outputLine('Rename canceled: invalid filename');
+            return;
+        }
+
+        if (newName === oldName) {
+            return;
+        }
+
+        try {
+            const content = await this.readRemoteFile(oldName);
+            await this.sendScriptTextToiii(newName, content);
+            await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(oldName)})`);
+            this.outputLine(`Renamed ${oldName} to ${newName}`);
+            await this.refreshFileList();
+        } catch (error) {
+            this.outputLine(`Rename error: ${error.message}`);
+        }
+    }
+
+    async deleteFile(fileName) {
+        if (!window.confirm(`Delete ${fileName}?`)) {
+            return;
+        }
+
+        try {
+            await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(fileName)})`);
+            this.outputLine(`Deleted ${fileName}`);
+            await this.refreshFileList();
+        } catch (error) {
+            this.outputLine(`Delete error: ${error.message}`);
         }
     }
 

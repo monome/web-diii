@@ -21,6 +21,13 @@
 
         <div class="workspace">
             <div class="split-container" id="splitContainer">
+                <aside class="file-explorer-pane" id="fileExplorerPane">
+                    <div class="file-explorer-header">
+                        <span>files</span>
+                        <button id="refreshFilesBtn" class="repl-action-btn">refresh</button>
+                    </div>
+                    <div id="fileList" class="file-list" aria-label="file list"></div>
+                </aside>
                 <div class="repl-pane full-width" id="replPane">
                     <div class="repl-content">
                         <div id="output" class="repl-output"></div>
