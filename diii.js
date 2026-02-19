@@ -57,8 +57,10 @@ class iiiConnection {
             return true;
         } catch (error) {
             console.error('Connection error:', error);
+            const browserError = String(error?.message || error || 'unknown serial error');
+
             if (this.onConnectionChange) {
-                this.onConnectionChange(false, error.message || 'connection failed');
+                this.onConnectionChange(false, 'connection failed', { browserError, reason: 'connect-failed' });
             }
             return false;
         }
@@ -104,7 +106,7 @@ class iiiConnection {
             }
 
             if (this.onConnectionChange) {
-                this.onConnectionChange(false, 'device disconnected');
+                this.onConnectionChange(false, 'disconnected');
             }
         }
     }
@@ -158,6 +160,8 @@ class DruidApp {
         this.iiiDevice = new iiiConnection();
         this.selectedPort = null;
         this.selectedPortInfo = null;
+        this.hasConnectedThisSession = false;
+        this.pendingConnectAttemptType = null;
         this.autoReconnectEnabled = false;
         this.autoReconnectTimer = null;
         this.reconnectDelayMs = 900;
@@ -504,68 +508,74 @@ class DruidApp {
 
     async connect(options = {}) {
         const { auto = false } = options;
+        this.pendingConnectAttemptType = auto ? 'auto' : 'manual';
 
-        if (!auto) {
-            this.outputLine('Connecting to iii device...');
-        }
-
-        let reconnectPort = this.selectedPort;
-
-        if (reconnectPort && 'serial' in navigator) {
-            try {
-                const availablePorts = await navigator.serial.getPorts();
-                const matchingPort = this.findMatchingPort(availablePorts, reconnectPort, this.selectedPortInfo);
-                if (matchingPort) {
-                    reconnectPort = matchingPort;
-                    this.selectedPort = matchingPort;
-                }
-            } catch {
-                // ignore and fall back to the remembered port object
+        try {
+            if (!auto) {
+                this.outputLine('Connecting to iii device...');
             }
-        }
 
-        let connected = await this.iiiDevice.connect(reconnectPort);
+            let reconnectPort = this.selectedPort;
 
-        if (!connected && this.selectedPort && !auto) {
-            this.selectedPort = null;
-            this.selectedPortInfo = null;
-            connected = await this.iiiDevice.connect();
-        }
+            if (reconnectPort && 'serial' in navigator) {
+                try {
+                    const availablePorts = await navigator.serial.getPorts();
+                    const matchingPort = this.findMatchingPort(availablePorts, reconnectPort, this.selectedPortInfo);
+                    if (matchingPort) {
+                        reconnectPort = matchingPort;
+                        this.selectedPort = matchingPort;
+                    }
+                } catch {
+                    // ignore and fall back to the remembered port object
+                }
+            }
 
-        if (connected) {
-            this.selectedPort = this.iiiDevice.port;
-            this.selectedPortInfo = this.getPortInfo(this.selectedPort);
-            this.autoReconnectEnabled = true;
-            this.clearAutoReconnectTimer();
-            this.setExplorerCollapsed(false);
-            const deviceType = await this.updateConnectedDeviceLabel();
+            let connected = await this.iiiDevice.connect(reconnectPort);
+
+            if (!connected && this.selectedPort && !auto) {
+                this.selectedPort = null;
+                this.selectedPortInfo = null;
+                connected = await this.iiiDevice.connect();
+            }
+
+            if (connected) {
+                this.selectedPort = this.iiiDevice.port;
+                this.selectedPortInfo = this.getPortInfo(this.selectedPort);
+                this.hasConnectedThisSession = true;
+                this.autoReconnectEnabled = true;
+                this.clearAutoReconnectTimer();
+                this.setExplorerCollapsed(false);
+                const deviceType = await this.updateConnectedDeviceLabel();
+
+                if (auto) {
+                    if (deviceType) {
+                        this.outputHTML(`<strong>${this.escapeHtml(deviceType)}</strong> reconnected.\n`);
+                    } else {
+                        this.outputLine('Reconnected.');
+                    }
+                } else if (deviceType) {
+                    this.outputHTML(`<strong>${this.escapeHtml(deviceType)}</strong> connected! Ready to code.\n`);
+                } else {
+                    this.outputLine('Connected! Ready to code.');
+                }
+
+                if (!auto) {
+                    this.outputLine('Drag and drop a lua file here to auto-upload.');
+                    this.outputLine('');
+                }
+
+                await this.refreshFileList();
+                return true;
+            }
 
             if (auto) {
-                if (deviceType) {
-                    this.outputHTML(`<strong>${this.escapeHtml(deviceType)}</strong> reconnected.\n`);
-                } else {
-                    this.outputLine('Reconnected.');
-                }
-            } else if (deviceType) {
-                this.outputHTML(`<strong>${this.escapeHtml(deviceType)}</strong> connected! Ready to code.\n`);
-            } else {
-                this.outputLine('Connected! Ready to code.');
+                this.scheduleAutoReconnect();
             }
 
-            if (!auto) {
-                this.outputLine('Drag and drop a lua file here to auto-upload.');
-                this.outputLine('');
-            }
-
-            await this.refreshFileList();
-            return true;
+            return false;
+        } finally {
+            this.pendingConnectAttemptType = null;
         }
-
-        if (auto) {
-            this.scheduleAutoReconnect();
-        }
-
-        return false;
     }
 
     async updateConnectedDeviceLabel() {
@@ -604,7 +614,7 @@ class DruidApp {
         this.renderFileList();
     }
 
-    handleConnectionChange(connected, error) {
+    handleConnectionChange(connected, error, detail = null) {
         if (!this.elements.connectionBtn || !this.elements.replStatusIndicator || !this.elements.replStatusText) return;
 
         if (connected) {
@@ -612,13 +622,28 @@ class DruidApp {
             this.elements.replStatusIndicator.classList.add('connected');
             this.elements.replStatusText.textContent = 'connected';
             this.elements.replInput?.focus();
+            this.hasConnectedThisSession = true;
             this.isManualDisconnect = false;
             return;
         }
 
         this.elements.connectionBtn.textContent = 'connect';
         this.elements.replStatusIndicator.classList.remove('connected');
-        this.elements.replStatusText.textContent = error || 'not connected';
+
+        const browserError = String(detail?.browserError || '').trim();
+        const isConnectFailure = error === 'connection failed';
+        const isManualConnectFailure = isConnectFailure && this.pendingConnectAttemptType === 'manual';
+
+        if (isManualConnectFailure || (!this.hasConnectedThisSession && isConnectFailure)) {
+            this.elements.replStatusText.textContent = 'connection failed';
+            if (browserError) {
+                this.outputLine(`Browser error: ${browserError}`);
+            }
+        } else if (this.hasConnectedThisSession) {
+            this.elements.replStatusText.textContent = 'disconnected';
+        } else {
+            this.elements.replStatusText.textContent = 'not connected';
+        }
 
         if (error && error.includes('disconnected')) {
             this.outputLine('');
