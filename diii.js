@@ -13,6 +13,8 @@ class iiiConnection {
         this.writableStreamClosed = null;
         this.isConnected = false;
         this.lineBuffer = '';
+        this.partialLineFlushTimer = null;
+        this.partialLineFlushDelayMs = 40;
         this.onDataReceived = null;
         this.onConnectionChange = null;
         this._textEncoder = new TextEncoder();
@@ -83,7 +85,15 @@ class iiiConnection {
                         this.onDataReceived(line);
                     }
                 }
+
+                if (this.lineBuffer) {
+                    this.schedulePartialLineFlush();
+                } else {
+                    this.clearPartialLineFlush();
+                }
             }
+
+            this.flushPartialLineBuffer();
         } catch (error) {
             console.error('Read error:', error);
             if (!this.isConnected) return;
@@ -98,7 +108,7 @@ class iiiConnection {
 
             this.reader = null;
             this.writer = null;
-            this.lineBuffer = '';
+            this.flushPartialLineBuffer();
 
             if (this.port) {
                 await this.port.close().catch(() => {});
@@ -131,6 +141,7 @@ class iiiConnection {
 
     async disconnect() {
         this.isConnected = false;
+        this.clearPartialLineFlush();
 
         if (this.reader) {
             await this.reader.cancel().catch(() => {});
@@ -147,10 +158,36 @@ class iiiConnection {
         this.port = null;
         this.reader = null;
         this.writer = null;
-        this.lineBuffer = '';
+        this.flushPartialLineBuffer();
 
         if (this.onConnectionChange) {
             this.onConnectionChange(false);
+        }
+    }
+
+    schedulePartialLineFlush() {
+        this.clearPartialLineFlush();
+
+        this.partialLineFlushTimer = setTimeout(() => {
+            this.flushPartialLineBuffer();
+        }, this.partialLineFlushDelayMs);
+    }
+
+    clearPartialLineFlush() {
+        if (!this.partialLineFlushTimer) return;
+        clearTimeout(this.partialLineFlushTimer);
+        this.partialLineFlushTimer = null;
+    }
+
+    flushPartialLineBuffer() {
+        this.clearPartialLineFlush();
+
+        if (!this.lineBuffer) return;
+
+        const partial = this.lineBuffer;
+        this.lineBuffer = '';
+        if (partial && this.onDataReceived) {
+            this.onDataReceived(partial);
         }
     }
 }
@@ -549,12 +586,12 @@ class DruidApp {
 
                 if (auto) {
                     if (deviceType) {
-                        this.outputHTML(`<strong>${this.escapeHtml(deviceType)}</strong> reconnected.\n`);
+                        this.outputLine(`${deviceType} reconnected.`);
                     } else {
                         this.outputLine('Reconnected.');
                     }
                 } else if (deviceType) {
-                    this.outputHTML(`<strong>${this.escapeHtml(deviceType)}</strong> connected! Ready to code.\n`);
+                    this.outputLine(`${deviceType} connected! Ready to code.`);
                 } else {
                     this.outputLine('Connected! Ready to code.');
                 }
@@ -1237,7 +1274,7 @@ class DruidApp {
             }
             this.activeFileName = fileName;
             this.renderFileList();
-            this.outputLine(`Ran ${fileName}`);
+            this.outputLine(`Running ${fileName}`);
         } catch (error) {
             this.outputLine(`Run error: ${error.message}`);
         }
