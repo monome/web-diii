@@ -214,9 +214,12 @@ class DruidApp {
         this.toastTimer = null;
         this.toastElement = null;
         this.fileEntries = [];
+        this.firstEquivalentFileNames = new Set();
         this.fileFreeSpaceBytes = null;
         this.openMenuFile = null;
         this.isExplorerCollapsed = true;
+        this.fileRunQueue = Promise.resolve();
+        this.pendingSuppressedOutputLines = [];
         this.explorerWidthStorageKey = 'webdiii.explorerWidth';
         this.explorerWidthDefault = 280;
         this.explorerWidthMin = 220;
@@ -493,22 +496,28 @@ class DruidApp {
         }
     }
 
-    outputText(text) {
+    outputText(text, options = {}) {
+        const { autoScroll = true } = options;
         if (!this.elements.output) return;
         this.elements.output.appendChild(document.createTextNode(text));
-        this.elements.output.scrollTop = this.elements.output.scrollHeight;
+        if (autoScroll) {
+            this.elements.output.scrollTop = this.elements.output.scrollHeight;
+        }
     }
 
-    outputLine(text) {
-        this.outputText(`${text}\n`);
+    outputLine(text, options = {}) {
+        this.outputText(`${text}\n`, options);
     }
 
-    outputHTML(html) {
+    outputHTML(html, options = {}) {
+        const { autoScroll = true } = options;
         if (!this.elements.output) return;
         const span = document.createElement('span');
         span.innerHTML = html;
         this.elements.output.appendChild(span);
-        this.elements.output.scrollTop = this.elements.output.scrollHeight;
+        if (autoScroll) {
+            this.elements.output.scrollTop = this.elements.output.scrollHeight;
+        }
     }
 
     showToast(message, type = 'info') {
@@ -531,15 +540,6 @@ class DruidApp {
             }
             this.toastTimer = null;
         }, 2600);
-    }
-
-    escapeHtml(value) {
-        return String(value)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
     }
 
     clearOutput() {
@@ -967,6 +967,10 @@ class DruidApp {
         const cleaned = String(data).replace(/\r/g, '');
         if (!cleaned) return;
 
+        if (this.handleSuppressedOutputLine(cleaned)) {
+            return;
+        }
+
         if (this.handleLuaCaptureLine(cleaned)) {
             return;
         }
@@ -1053,12 +1057,37 @@ class DruidApp {
             throw new Error('Missing file name for ^^s');
         }
 
+        this.queueSuppressedOutputLine('-- receiving data');
+        this.queueSuppressedOutputLine(`-- set filename: ${normalizedName}`);
+
         await this.iiiDevice.writeLine('^^s');
         await this.delay(100);
         await this.iiiDevice.writeLine(normalizedName);
         await this.delay(100);
         await this.iiiDevice.writeLine('^^f');
         await this.delay(100);
+    }
+
+    queueSuppressedOutputLine(line, ttlMs = 2500) {
+        const value = String(line || '');
+        if (!value) return;
+        this.pendingSuppressedOutputLines.push({
+            line: value,
+            expiresAt: Date.now() + ttlMs
+        });
+    }
+
+    handleSuppressedOutputLine(line) {
+        if (!this.pendingSuppressedOutputLines.length) return false;
+
+        const now = Date.now();
+        this.pendingSuppressedOutputLines = this.pendingSuppressedOutputLines.filter((entry) => entry.expiresAt > now);
+
+        const matchIndex = this.pendingSuppressedOutputLines.findIndex((entry) => entry.line === line);
+        if (matchIndex === -1) return false;
+
+        this.pendingSuppressedOutputLines.splice(matchIndex, 1);
+        return true;
     }
 
     async sendScriptTextToiii(fileName, text) {
@@ -1117,7 +1146,7 @@ class DruidApp {
             this.setExplorerCollapsed(false);
             const text = await file.text();
             await this.uploadTextAsScript(file.name, text);
-            await this.runFile(file.name);
+            await this.enqueueRunFile(file.name, { prepRuntimeWithLib: true });
         } catch (error) {
             this.outputLine(`Upload error: ${error.message}`);
         }
@@ -1170,7 +1199,7 @@ class DruidApp {
             playBtn.setAttribute('aria-label', `run ${entry.name}`);
             playBtn.addEventListener('click', async (event) => {
                 event.stopPropagation();
-                await this.runFile(entry.name);
+                await this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true });
             });
             main.appendChild(playBtn);
 
@@ -1179,6 +1208,14 @@ class DruidApp {
             label.textContent = `${entry.name} (${this.formatSizeKb(entry.size)})`;
 
             main.appendChild(label);
+
+            if (entry.name !== 'init.lua' && this.firstEquivalentFileNames.has(entry.name)) {
+                const firstBadge = document.createElement('span');
+                firstBadge.className = 'file-first-pill';
+                firstBadge.textContent = 'first';
+                firstBadge.setAttribute('aria-label', `${entry.name} matches init.lua`);
+                main.appendChild(firstBadge);
+            }
 
             const menuBtn = document.createElement('button');
             menuBtn.className = 'file-menu-btn';
@@ -1194,17 +1231,31 @@ class DruidApp {
             const menu = document.createElement('div');
             menu.className = `file-menu${this.openMenuFile === entry.name ? ' open' : ''}`;
 
-            const actions = isLibFile
+            const actions = (isLibFile
                 ? [
+                    { label: 'read', fn: () => this.showFile(entry.name) },
+                    { label: 'run', fn: () => this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true }) },
                     { label: 'download', fn: () => this.downloadFile(entry.name) },
                     { label: 'delete', fn: () => this.deleteFile(entry.name) }
                 ]
                 : [
                     { label: 'first', fn: () => this.copyToInit(entry.name) },
+                    { label: 'read', fn: () => this.showFile(entry.name) },
+                    { label: 'run', fn: () => this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true }) },
                     { label: 'download', fn: () => this.downloadFile(entry.name) },
                     { label: 'rename', fn: () => this.renameFile(entry.name) },
                     { label: 'delete', fn: () => this.deleteFile(entry.name) }
-                ];
+                ])
+                .sort((a, b) => {
+                    const priorityOf = (label) => {
+                        if (label === 'run') return 0;
+                        if (label === 'delete') return 2;
+                        return 1;
+                    };
+                    const priorityDiff = priorityOf(a.label) - priorityOf(b.label);
+                    if (priorityDiff !== 0) return priorityDiff;
+                    return a.label.localeCompare(b.label);
+                });
 
             for (const action of actions) {
                 const item = document.createElement('button');
@@ -1360,6 +1411,7 @@ class DruidApp {
     async refreshFileList() {
         if (!this.iiiDevice.isConnected) {
             this.fileEntries = [];
+            this.firstEquivalentFileNames = new Set();
             this.fileFreeSpaceBytes = null;
             this.updateFileSpaceFooter(null);
             this.renderFileList();
@@ -1389,6 +1441,12 @@ class DruidApp {
             this.fileEntries = entries;
 
             try {
+                await this.refreshFirstEquivalentFileNames(entries);
+            } catch {
+                this.firstEquivalentFileNames = new Set();
+            }
+
+            try {
                 this.activeFileName = await this.requestActiveFileName();
             } catch {
                 this.activeFileName = null;
@@ -1397,10 +1455,42 @@ class DruidApp {
             this.updateFileSpaceFooter(this.fileFreeSpaceBytes);
             this.renderFileList();
         } catch (error) {
+            this.firstEquivalentFileNames = new Set();
             this.fileFreeSpaceBytes = null;
             this.updateFileSpaceFooter(null);
             this.outputLine(`File list error: ${error.message}`);
         }
+    }
+
+    async refreshFirstEquivalentFileNames(entries) {
+        const hasInitLua = entries.some((entry) => entry.name === 'init.lua');
+        if (!hasInitLua) {
+            this.firstEquivalentFileNames = new Set();
+            return;
+        }
+
+        const candidateNames = entries
+            .map((entry) => entry.name)
+            .filter((name) => name !== 'init.lua');
+
+        if (candidateNames.length === 0) {
+            this.firstEquivalentFileNames = new Set();
+            return;
+        }
+
+        const luaList = candidateNames.map((name) => this.luaQuote(name)).join(', ');
+        const lines = await this.executeLuaCapture(
+            `local function __norm(__s) if not __s then return nil end return (__s:gsub("%z+$", "")) end local __init = __norm(fs_read_file('init.lua')); if __init then for _, __name in ipairs({${luaList}}) do local __data = __norm(fs_read_file(__name)); if __data and __data == __init then print("__webdiii_firsteq\\t" .. __name) end end end`
+        );
+
+        const matches = new Set();
+        for (const line of lines) {
+            if (!line.startsWith('__webdiii_firsteq\t')) continue;
+            const name = line.split('\t')[1];
+            if (name) matches.add(name);
+        }
+
+        this.firstEquivalentFileNames = matches;
     }
 
     async readRemoteFile(fileName) {
@@ -1440,8 +1530,70 @@ class DruidApp {
         }
     }
 
-    async runFile(fileName) {
+    async showFile(fileName) {
         try {
+            if (!this.elements.output) return;
+
+            const topSpacerLine = document.createElement('span');
+            topSpacerLine.textContent = '\n';
+            this.elements.output.appendChild(topSpacerLine);
+
+            const headerLine = document.createElement('span');
+            headerLine.textContent = `${fileName} contents:\n`;
+            this.elements.output.appendChild(headerLine);
+
+            const afterHeaderSpacerLine = document.createElement('span');
+            afterHeaderSpacerLine.textContent = '\n';
+            this.elements.output.appendChild(afterHeaderSpacerLine);
+
+            const lines = await this.executeLuaCapture(`print(fs_read_file(${this.luaQuote(fileName)}))`);
+            for (const line of lines) {
+                this.outputLine(line, { autoScroll: false });
+            }
+
+            const trailingSpacerLine = document.createElement('span');
+            trailingSpacerLine.textContent = '\n';
+            this.elements.output.appendChild(trailingSpacerLine);
+
+            this.elements.output.scrollTop = topSpacerLine.offsetTop;
+        } catch (error) {
+            this.outputLine(`Show error: ${error.message}`);
+        }
+    }
+
+    async prepareRuntimeWithLib() {
+        this.queueSuppressedOutputLine('-- re-init with no script');
+        this.queueSuppressedOutputLine('-- init: skip script');
+        this.queueSuppressedOutputLine('-- init: writing lib.lua');
+        await this.iiiDevice.writeLine('^^c');
+        await this.delay(120);
+
+        await this.executeLuaCapture("fs_run_file('lib.lua')");
+
+        this.activeFileName = null;
+        this.renderFileList();
+    }
+
+    async enqueueRunFile(fileName, options = {}) {
+        const task = async () => {
+            await this.runFile(fileName, options);
+        };
+
+        this.fileRunQueue = this.fileRunQueue
+            .catch(() => {})
+            .then(task);
+
+        return this.fileRunQueue;
+    }
+
+    async runFile(fileName, options = {}) {
+        const { prepRuntimeWithLib = false } = options;
+
+        try {
+            if (prepRuntimeWithLib) {
+                await this.prepareRuntimeWithLib();
+            }
+
             await this.openAndSelectRemoteFile(fileName);
             const lines = await this.executeLuaCapture(`fs_run_file(${this.luaQuote(fileName)})`);
             for (const line of lines) {
@@ -1529,7 +1681,7 @@ class DruidApp {
 
             const text = await file.text();
             await this.uploadTextAsScript(file.name, text);
-            await this.runFile(file.name);
+            await this.enqueueRunFile(file.name, { prepRuntimeWithLib: true });
         });
     }
 

@@ -304,6 +304,19 @@ body.is-resizing-explorer * {
     white-space: nowrap;
 }
 
+.file-first-pill {
+    border: 1px solid var(--neutral-heavy);
+    background-color: var(--bg-surface);
+    color: var(--neutral-heavy);
+    font-family: monospace;
+    font-size: 0.68rem;
+    line-height: 1;
+    padding: 3px 6px;
+    border-radius: 999px;
+    text-transform: lowercase;
+    flex-shrink: 0;
+}
+
 .file-menu-btn {
     border: 1px solid var(--neutral-trim);
     background-color: var(--bg-surface);
