@@ -305,13 +305,13 @@ body.is-resizing-explorer * {
 }
 
 .file-first-pill {
-    border: 1px solid var(--neutral-heavy);
-    background-color: var(--bg-surface);
-    color: var(--neutral-heavy);
+    border: 0;
+    background-color: var(--neutral-heavy);
+    color: #000;
     font-family: monospace;
     font-size: 0.68rem;
     line-height: 1;
-    padding: 3px 6px;
+    padding: 4px 6px 2px;
     border-radius: 999px;
     text-transform: lowercase;
     flex-shrink: 0;
