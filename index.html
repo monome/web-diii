@@ -42,25 +42,38 @@
                 </aside>
                 <div id="explorerResizer" class="explorer-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-label="resize explorer" aria-controls="fileExplorerPane"></div>
                 <div class="repl-pane full-width" id="replPane">
-                    <div class="repl-content">
-                        <div class="repl-output-area">
-                            <div id="output" class="repl-output"></div>
-                            <button id="clearBtn" class="repl-action-btn output-cleanup-btn">clean</button>
-                        </div>
-                        <div class="repl-actions">
-                            <button id="replConnectionBtn" class="repl-connection-btn" title="connect/disconnect (Cmd/Ctrl+Shift+C)">connect</button>
-                            <button id="uploadBtn" class="repl-action-btn">upload</button>
-                            <button id="restartBtn" class="repl-action-btn">reboot</button>
-                            <button id="bootloaderBtn" class="repl-action-btn">bootloader</button>
-                            <button id="reformatBtn" class="repl-action-btn">reformat</button>
-                            <div class="repl-actions-spacer"></div>
-                        </div>
-                        <div class="repl-input-container">
-                            <div class="repl-input-row">
-                                <span class="repl-input-prompt" aria-hidden="true">&gt;&gt;</span>
-                                <textarea id="replInput" class="repl-input" placeholder="send iii commands live here"></textarea>
+                    <div id="replShell" class="repl-shell">
+                        <div class="repl-content">
+                            <div class="repl-output-area">
+                                <div id="output" class="repl-output"></div>
+                                <button id="clearBtn" class="repl-action-btn output-cleanup-btn">clean</button>
+                            </div>
+                            <div class="repl-actions">
+                                <button id="replConnectionBtn" class="repl-connection-btn" title="connect/disconnect (Cmd/Ctrl+Shift+C)">connect</button>
+                                <button id="uploadBtn" class="repl-action-btn">upload</button>
+                                <button id="restartBtn" class="repl-action-btn">reboot</button>
+                                <button id="bootloaderBtn" class="repl-action-btn">bootloader</button>
+                                <button id="reformatBtn" class="repl-action-btn">reformat</button>
+                                <div class="repl-actions-spacer"></div>
+                                <button id="midiMonitorToggleBtn" class="repl-action-btn" aria-expanded="false" aria-controls="midiMonitorPane">midi</button>
+                            </div>
+                            <div class="repl-input-container">
+                                <div class="repl-input-row">
+                                    <span class="repl-input-prompt" aria-hidden="true">&gt;&gt;</span>
+                                    <textarea id="replInput" class="repl-input" placeholder="send iii commands live here"></textarea>
+                                </div>
                             </div>
                         </div>
+                        <div id="midiResizer" class="midi-resizer hidden" role="separator" tabindex="-1" aria-orientation="vertical" aria-label="resize midi monitor" aria-controls="midiMonitorPane" aria-hidden="true" aria-disabled="true"></div>
+                        <aside id="midiMonitorPane" class="midi-monitor-pane hidden" aria-hidden="true">
+                            <div class="midi-monitor-header">
+                                <span class="midi-monitor-title">midi monitor</span>
+                                <button id="midiAudioToggleBtn" class="repl-action-btn midi-audio-btn">unmute</button>
+                                <button id="midiClearBtn" class="repl-action-btn midi-clear-btn">clean</button>
+                            </div>
+                            <div id="midiMonitorStatus" class="midi-monitor-status">closed</div>
+                            <div id="midiMonitorLog" class="midi-monitor-log" aria-live="polite"></div>
+                        </aside>
                     </div>
                 </div>
             </div>

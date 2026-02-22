@@ -115,8 +115,15 @@ body {
     height: 100%;
     background-color: var(--bg-subdued);
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     overflow: hidden;
+}
+
+.repl-shell {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
 }
 
 .repl-pane.full-width {
@@ -209,6 +216,12 @@ body {
 
 body.is-resizing-explorer,
 body.is-resizing-explorer * {
+    cursor: col-resize !important;
+    user-select: none;
+}
+
+body.is-resizing-midi,
+body.is-resizing-midi * {
     cursor: col-resize !important;
     user-select: none;
 }
@@ -372,8 +385,133 @@ body.is-resizing-explorer * {
 .repl-content {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-width: 0;
     height: 100%;
     min-height: 0;
+}
+
+.midi-monitor-pane {
+    width: 340px;
+    min-width: 240px;
+    max-width: 560px;
+    background-color: var(--bg-default);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.midi-resizer {
+    width: 6px;
+    flex: 0 0 6px;
+    background-color: var(--bg-default);
+    border-left: 1px solid var(--neutral-trim);
+    border-right: 1px solid var(--neutral-trim);
+    cursor: col-resize;
+    transition: background-color 120ms ease;
+}
+
+.midi-resizer:hover,
+.midi-resizer.dragging {
+    background-color: var(--neutral-trim);
+}
+
+.midi-resizer:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.midi-resizer.hidden {
+    display: none;
+}
+
+.midi-monitor-pane.hidden {
+    display: none;
+}
+
+.midi-monitor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--neutral-trim);
+}
+
+.midi-monitor-title {
+    font-size: 0.85rem;
+    text-transform: lowercase;
+    color: var(--neutral-heavy);
+}
+
+.midi-clear-btn {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+}
+
+.midi-audio-btn {
+    margin-left: auto;
+    padding: 4px 8px;
+    font-size: 0.75rem;
+}
+
+.midi-monitor-status {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--neutral-trim);
+    color: var(--neutral-medium);
+    font-size: 0.8rem;
+    text-transform: lowercase;
+}
+
+.midi-monitor-log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 12px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background-color: var(--bg-default);
+}
+
+.midi-line {
+    margin-bottom: 4px;
+}
+
+.midi-line-time {
+    color: var(--neutral-medium);
+}
+
+.midi-line-meta {
+    color: var(--interactive-medium);
+}
+
+.midi-line-meta strong {
+    color: var(--neutral-heavy);
+}
+
+.midi-type-note-on {
+    color: var(--accent-hover);
+}
+
+.midi-type-note-off {
+    color: #ff4d4f;
+}
+
+.midi-type-control-change {
+    color: #00d5ff;
+}
+
+.midi-type-program-change {
+    color: var(--accent);
+}
+
+.midi-type-pitch-bend,
+.midi-type-channel-pressure,
+.midi-type-poly-aftertouch,
+.midi-type-system {
+    color: var(--neutral-heavy);
 }
 
 .repl-output-area {
@@ -599,6 +737,11 @@ body.is-resizing-explorer * {
 
     .repl-actions {
         flex-wrap: wrap;
+    }
+
+    .midi-monitor-pane {
+        width: 280px;
+        min-width: 220px;
     }
 
     .file-explorer-pane {

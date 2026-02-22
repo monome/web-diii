@@ -228,6 +228,22 @@ class DruidApp {
         this.explorerResizePointerId = null;
         this.explorerResizeStartX = 0;
         this.explorerResizeStartWidth = this.explorerWidthDefault;
+        this.midiMonitorVisible = false;
+        this.midiAccess = null;
+        this.midiPermissionRequested = false;
+        this.midiInputNames = new Set();
+        this.midiLogLimit = 600;
+        this.midiAudioMuted = true;
+        this.midiAudioContext = null;
+        this.midiActiveVoices = new Map();
+        this.midiWidthStorageKey = 'webdiii.midiWidth';
+        this.midiWidthDefault = 340;
+        this.midiWidthMin = 220;
+        this.midiWidthMax = 560;
+        this.isResizingMidi = false;
+        this.midiResizePointerId = null;
+        this.midiResizeStartX = 0;
+        this.midiResizeStartWidth = this.midiWidthDefault;
 
         this.cacheElements();
         this.bindEvents();
@@ -235,6 +251,9 @@ class DruidApp {
         this.setExplorerCollapsed(true);
         this.checkBrowserSupport();
         this.renderFileList();
+        this.setMidiMonitorVisible(false);
+        this.updateMidiAudioButton();
+        this.updateMidiMonitorStatus('closed');
 
         this.outputLine('//// welcome. connect to an iii compatible grid or arc to begin.');
     }
@@ -259,11 +278,19 @@ class DruidApp {
             output: document.getElementById('output'),
             replInput: document.getElementById('replInput'),
             replPane: document.getElementById('replPane'),
+            replShell: document.getElementById('replShell'),
             uploadBtn: document.getElementById('uploadBtn'),
             restartBtn: document.getElementById('restartBtn'),
             bootloaderBtn: document.getElementById('bootloaderBtn'),
             reformatBtn: document.getElementById('reformatBtn'),
             clearBtn: document.getElementById('clearBtn'),
+            midiMonitorToggleBtn: document.getElementById('midiMonitorToggleBtn'),
+            midiResizer: document.getElementById('midiResizer'),
+            midiMonitorPane: document.getElementById('midiMonitorPane'),
+            midiMonitorStatus: document.getElementById('midiMonitorStatus'),
+            midiMonitorLog: document.getElementById('midiMonitorLog'),
+            midiAudioToggleBtn: document.getElementById('midiAudioToggleBtn'),
+            midiClearBtn: document.getElementById('midiClearBtn'),
 
             fileInput: document.getElementById('fileInput'),
 
@@ -289,6 +316,11 @@ class DruidApp {
         on(this.elements.bootloaderBtn, 'click', () => this.bootloaderDevice());
         on(this.elements.reformatBtn, 'click', () => this.reformatFs());
         on(this.elements.clearBtn, 'click', () => this.clearOutput());
+        on(this.elements.midiMonitorToggleBtn, 'click', () => this.toggleMidiMonitor());
+        on(this.elements.midiResizer, 'pointerdown', (e) => this.startMidiResize(e));
+        on(this.elements.midiResizer, 'keydown', (e) => this.handleMidiResizerKeydown(e));
+        on(this.elements.midiAudioToggleBtn, 'click', () => this.toggleMidiAudioMute());
+        on(this.elements.midiClearBtn, 'click', () => this.clearMidiMonitorLog());
         on(this.elements.fileInput, 'change', (e) => this.handleFileSelect(e));
         on(document, 'click', (e) => this.handleDocumentClick(e));
 
@@ -544,6 +576,586 @@ class DruidApp {
 
     clearOutput() {
         if (this.elements.output) this.elements.output.textContent = '';
+    }
+
+    setMidiMonitorVisible(visible) {
+        this.midiMonitorVisible = Boolean(visible);
+
+        const pane = this.elements.midiMonitorPane;
+        const resizer = this.elements.midiResizer;
+        if (pane) {
+            pane.classList.toggle('hidden', !this.midiMonitorVisible);
+            pane.setAttribute('aria-hidden', String(!this.midiMonitorVisible));
+
+            if (this.midiMonitorVisible) {
+                this.restoreMidiWidth();
+            }
+        }
+
+        if (resizer) {
+            resizer.classList.toggle('hidden', !this.midiMonitorVisible);
+            resizer.setAttribute('aria-hidden', String(!this.midiMonitorVisible));
+            resizer.setAttribute('aria-disabled', String(!this.midiMonitorVisible));
+            resizer.tabIndex = this.midiMonitorVisible ? 0 : -1;
+        }
+
+        if (this.elements.midiMonitorToggleBtn) {
+            this.elements.midiMonitorToggleBtn.textContent = this.midiMonitorVisible ? 'hide midi' : 'midi';
+            this.elements.midiMonitorToggleBtn.setAttribute('aria-expanded', String(this.midiMonitorVisible));
+        }
+
+        this.updateMidiResizerA11y();
+    }
+
+    clampMidiWidth(width) {
+        const containerWidth = this.elements.replShell?.clientWidth || this.elements.replPane?.clientWidth || 0;
+        const dynamicMax = containerWidth > 0
+            ? Math.max(this.midiWidthMin, containerWidth - 360)
+            : this.midiWidthMax;
+        const hardMax = Math.max(this.midiWidthMin, Math.min(this.midiWidthMax, dynamicMax));
+        return Math.max(this.midiWidthMin, Math.min(hardMax, Math.round(width)));
+    }
+
+    setMidiWidth(width, { persist = true } = {}) {
+        const pane = this.elements.midiMonitorPane;
+        if (!pane || !Number.isFinite(Number(width))) return;
+
+        const clamped = this.clampMidiWidth(Number(width));
+        pane.style.width = `${clamped}px`;
+        pane.style.minWidth = `${clamped}px`;
+        pane.style.maxWidth = `${clamped}px`;
+        this.updateMidiResizerA11y(clamped);
+
+        if (persist) {
+            try {
+                window.localStorage.setItem(this.midiWidthStorageKey, String(clamped));
+            } catch {
+                // ignore localStorage failures
+            }
+        }
+    }
+
+    restoreMidiWidth() {
+        let restored = this.midiWidthDefault;
+
+        try {
+            const raw = window.localStorage.getItem(this.midiWidthStorageKey);
+            if (raw != null) {
+                const parsed = Number.parseInt(raw, 10);
+                if (Number.isFinite(parsed)) {
+                    restored = parsed;
+                }
+            }
+        } catch {
+            // ignore localStorage failures
+        }
+
+        this.setMidiWidth(restored, { persist: false });
+    }
+
+    getMidiWidth() {
+        return this.elements.midiMonitorPane?.getBoundingClientRect?.().width || this.midiWidthDefault;
+    }
+
+    updateMidiResizerA11y(width = this.getMidiWidth()) {
+        const resizer = this.elements.midiResizer;
+        if (!resizer || !this.midiMonitorVisible) return;
+
+        const maxWidth = this.clampMidiWidth(Number.MAX_SAFE_INTEGER);
+        const currentWidth = this.clampMidiWidth(width);
+        resizer.setAttribute('aria-valuemin', String(this.midiWidthMin));
+        resizer.setAttribute('aria-valuemax', String(maxWidth));
+        resizer.setAttribute('aria-valuenow', String(currentWidth));
+        resizer.setAttribute('aria-valuetext', `${currentWidth} pixels`);
+    }
+
+    handleMidiResizerKeydown(event) {
+        if (!this.midiMonitorVisible) return;
+
+        const key = event.key;
+        const isArrow = key === 'ArrowLeft' || key === 'ArrowRight';
+        const isBoundary = key === 'Home' || key === 'End';
+        if (!isArrow && !isBoundary) return;
+
+        event.preventDefault();
+
+        const currentWidth = this.getMidiWidth();
+        const step = event.shiftKey ? 48 : 16;
+
+        if (key === 'Home') {
+            this.setMidiWidth(this.midiWidthMin);
+            return;
+        }
+
+        if (key === 'End') {
+            this.setMidiWidth(this.clampMidiWidth(Number.MAX_SAFE_INTEGER));
+            return;
+        }
+
+        const direction = key === 'ArrowLeft' ? 1 : -1;
+        this.setMidiWidth(currentWidth + (direction * step));
+    }
+
+    startMidiResize(event) {
+        if (!this.midiMonitorVisible) return;
+        if (!this.elements.midiMonitorPane || !this.elements.midiResizer) return;
+
+        event.preventDefault();
+
+        this.isResizingMidi = true;
+        this.midiResizePointerId = event.pointerId;
+        this.midiResizeStartX = event.clientX;
+        this.midiResizeStartWidth = this.elements.midiMonitorPane.getBoundingClientRect().width;
+
+        this.elements.midiResizer.classList.add('dragging');
+        this.elements.midiResizer.setPointerCapture(event.pointerId);
+        document.body.classList.add('is-resizing-midi');
+
+        this.boundMidiResizeMove = this.boundMidiResizeMove || ((e) => this.handleMidiResizeMove(e));
+        this.boundMidiResizeEnd = this.boundMidiResizeEnd || ((e) => this.endMidiResize(e));
+
+        window.addEventListener('pointermove', this.boundMidiResizeMove);
+        window.addEventListener('pointerup', this.boundMidiResizeEnd);
+        window.addEventListener('pointercancel', this.boundMidiResizeEnd);
+    }
+
+    handleMidiResizeMove(event) {
+        if (!this.isResizingMidi) return;
+        if (this.midiResizePointerId != null && event.pointerId !== this.midiResizePointerId) return;
+
+        const delta = event.clientX - this.midiResizeStartX;
+        this.setMidiWidth(this.midiResizeStartWidth - delta);
+    }
+
+    endMidiResize(event) {
+        if (!this.isResizingMidi) return;
+        if (event && this.midiResizePointerId != null && event.pointerId !== this.midiResizePointerId) return;
+
+        this.isResizingMidi = false;
+        this.midiResizePointerId = null;
+
+        this.elements.midiResizer?.classList.remove('dragging');
+        document.body.classList.remove('is-resizing-midi');
+
+        if (event && this.elements.midiResizer?.hasPointerCapture?.(event.pointerId)) {
+            this.elements.midiResizer.releasePointerCapture(event.pointerId);
+        }
+
+        if (this.boundMidiResizeMove) {
+            window.removeEventListener('pointermove', this.boundMidiResizeMove);
+        }
+        if (this.boundMidiResizeEnd) {
+            window.removeEventListener('pointerup', this.boundMidiResizeEnd);
+            window.removeEventListener('pointercancel', this.boundMidiResizeEnd);
+        }
+    }
+
+    updateMidiMonitorStatus(text) {
+        if (!this.elements.midiMonitorStatus) return;
+        this.elements.midiMonitorStatus.textContent = String(text || '');
+    }
+
+    clearMidiMonitorLog() {
+        if (this.elements.midiMonitorLog) {
+            this.elements.midiMonitorLog.textContent = '';
+        }
+    }
+
+    updateMidiAudioButton() {
+        if (!this.elements.midiAudioToggleBtn) return;
+        this.elements.midiAudioToggleBtn.textContent = this.midiAudioMuted ? 'unmute' : 'mute';
+        this.elements.midiAudioToggleBtn.setAttribute('aria-pressed', String(!this.midiAudioMuted));
+    }
+
+    async toggleMidiAudioMute() {
+        if (this.midiAudioMuted) {
+            const ready = await this.ensureMidiAudioContext();
+            if (!ready) {
+                this.appendMidiSystemLine('audio unavailable in this browser');
+                return;
+            }
+            this.midiAudioMuted = false;
+            this.updateMidiAudioButton();
+            this.appendMidiSystemLine('audio monitor unmuted');
+            return;
+        }
+
+        this.midiAudioMuted = true;
+        this.stopAllMidiVoices();
+        this.updateMidiAudioButton();
+        this.appendMidiSystemLine('audio monitor muted');
+    }
+
+    async ensureMidiAudioContext() {
+        if (!this.midiAudioContext) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return false;
+            this.midiAudioContext = new AudioCtx();
+        }
+
+        if (this.midiAudioContext.state === 'suspended') {
+            await this.midiAudioContext.resume();
+        }
+
+        return this.midiAudioContext.state === 'running';
+    }
+
+    midiNoteToFrequency(note) {
+        return 440 * Math.pow(2, (Number(note) - 69) / 12);
+    }
+
+    getMidiVoiceKey(channel, note) {
+        return `${channel}:${note}`;
+    }
+
+    stopMidiVoice(channel, note, releaseSeconds = 0.22) {
+        const key = this.getMidiVoiceKey(channel, note);
+        const voice = this.midiActiveVoices.get(key);
+        if (!voice || !this.midiAudioContext) return;
+
+        const now = this.midiAudioContext.currentTime;
+        const endAt = now + Math.max(0.03, releaseSeconds);
+
+        voice.gain.gain.cancelScheduledValues(now);
+        const current = Math.max(0.0001, voice.gain.gain.value || 0.0001);
+        voice.gain.gain.setValueAtTime(current, now);
+        voice.gain.gain.exponentialRampToValueAtTime(0.0001, endAt);
+
+        voice.osc1.stop(endAt + 0.01);
+        voice.osc2.stop(endAt + 0.01);
+        this.midiActiveVoices.delete(key);
+    }
+
+    stopAllMidiVoices() {
+        for (const key of this.midiActiveVoices.keys()) {
+            const [channel, note] = key.split(':').map((value) => Number(value));
+            this.stopMidiVoice(channel, note, 0.06);
+        }
+    }
+
+    playMidiPianoNote(channel, note, velocity) {
+        if (this.midiAudioMuted || !this.midiAudioContext) return;
+
+        const clampedVelocity = Math.max(1, Math.min(127, Number(velocity) || 0));
+        const frequency = this.midiNoteToFrequency(note);
+        const now = this.midiAudioContext.currentTime;
+        const key = this.getMidiVoiceKey(channel, note);
+
+        this.stopMidiVoice(channel, note, 0.02);
+
+        const osc1 = this.midiAudioContext.createOscillator();
+        const osc2 = this.midiAudioContext.createOscillator();
+        const filter = this.midiAudioContext.createBiquadFilter();
+        const gain = this.midiAudioContext.createGain();
+
+        osc1.type = 'triangle';
+        osc2.type = 'sine';
+        osc1.frequency.setValueAtTime(frequency, now);
+        osc2.frequency.setValueAtTime(frequency * 2, now);
+
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(1900, now);
+        filter.Q.setValueAtTime(0.8, now);
+
+        const velocityGain = 0.08 + ((clampedVelocity / 127) * 0.22);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.linearRampToValueAtTime(velocityGain, now + 0.006);
+        gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, velocityGain * 0.45), now + 0.36);
+
+        osc1.connect(filter);
+        osc2.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.midiAudioContext.destination);
+
+        osc1.start(now);
+        osc2.start(now);
+
+        this.midiActiveVoices.set(key, { osc1, osc2, gain });
+    }
+
+    handleMidiAudioMessage(bytes) {
+        if (this.midiAudioMuted || !this.midiAudioContext || !Array.isArray(bytes) || bytes.length === 0) {
+            return;
+        }
+
+        const status = bytes[0] || 0;
+        if (status >= 0xF0) return;
+
+        const command = status & 0xF0;
+        const channel = (status & 0x0F) + 1;
+        const note = bytes[1] || 0;
+        const velocity = bytes[2] || 0;
+
+        if (command === 0x90 && velocity > 0) {
+            this.playMidiPianoNote(channel, note, velocity);
+            return;
+        }
+
+        if (command === 0x80 || (command === 0x90 && velocity === 0)) {
+            this.stopMidiVoice(channel, note, 0.22);
+        }
+    }
+
+    async toggleMidiMonitor() {
+        if (this.midiMonitorVisible) {
+            this.setMidiMonitorVisible(false);
+            return;
+        }
+
+        this.setMidiMonitorVisible(true);
+
+        if (!this.midiAccess && !this.midiPermissionRequested) {
+            await this.initializeMidiAccess();
+            return;
+        }
+
+        if (!this.midiAccess) {
+            this.updateMidiMonitorStatus('midi unavailable (permission required)');
+            return;
+        }
+
+        this.updateMidiMonitorStatus(this.getMidiInputsSummary());
+    }
+
+    async initializeMidiAccess() {
+        if (!('requestMIDIAccess' in navigator)) {
+            this.updateMidiMonitorStatus('webmidi unsupported in this browser');
+            this.appendMidiSystemLine('WebMIDI API not supported in this browser.');
+            return false;
+        }
+
+        this.midiPermissionRequested = true;
+        this.updateMidiMonitorStatus('requesting midi permission...');
+
+        try {
+            this.midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+            this.midiAccess.onstatechange = (event) => this.handleMidiStateChange(event);
+            this.attachMidiInputHandlers();
+            this.updateMidiMonitorStatus(this.getMidiInputsSummary());
+            this.appendMidiSystemLine('MIDI monitor ready. Listening for incoming messages...');
+            return true;
+        } catch (error) {
+            const reason = String(error?.message || error || 'permission denied');
+            this.updateMidiMonitorStatus('midi unavailable (permission denied)');
+            this.appendMidiSystemLine(`MIDI permission failed: ${reason}`);
+            this.outputLine(`MIDI monitor unavailable: ${reason}`);
+            return false;
+        }
+    }
+
+    attachMidiInputHandlers() {
+        if (!this.midiAccess) return;
+
+        this.midiInputNames = new Set();
+        for (const input of this.midiAccess.inputs.values()) {
+            if (!input) continue;
+            const name = input.name || input.manufacturer || input.id || 'unknown input';
+            if (this.isIiiMidiInput(input)) {
+                input.onmidimessage = (event) => this.handleMidiMessage(event, input);
+                this.midiInputNames.add(name);
+            } else {
+                input.onmidimessage = null;
+            }
+        }
+    }
+
+    isIiiMidiInput(input) {
+        const label = String(input?.name || '').toLowerCase();
+        return label.includes('iii');
+    }
+
+    handleMidiStateChange(event) {
+        const port = event?.port;
+        if (!port || port.type !== 'input') {
+            this.updateMidiMonitorStatus(this.getMidiInputsSummary());
+            return;
+        }
+
+        const isIii = this.isIiiMidiInput(port);
+
+        if (port.state === 'connected' && isIii) {
+            port.onmidimessage = (midiEvent) => this.handleMidiMessage(midiEvent, port);
+            this.appendMidiSystemLine(`input connected: ${port.name || port.id || 'unknown input'}`);
+        } else if (port.state === 'disconnected' && isIii) {
+            this.appendMidiSystemLine(`input disconnected: ${port.name || port.id || 'unknown input'}`);
+        }
+
+        this.attachMidiInputHandlers();
+        this.updateMidiMonitorStatus(this.getMidiInputsSummary());
+    }
+
+    getMidiInputsSummary() {
+        if (!this.midiAccess) return 'midi unavailable';
+        const count = this.midiInputNames.size;
+        if (count === 0) return 'connected: no iii midi inputs found';
+        if (count === 1) return `connected: 1 iii midi input (${[...this.midiInputNames][0] || 'unnamed'})`;
+        return `connected: ${count} iii midi inputs`;
+    }
+
+    handleMidiMessage(event) {
+        if (!event?.data || event.data.length === 0) return;
+
+        const bytes = Array.from(event.data);
+        this.handleMidiAudioMessage(bytes);
+        const parsed = this.parseMidiMessage(bytes);
+        this.appendMidiLogLine({
+            typeClass: parsed.typeClass,
+            typeLabel: parsed.label,
+            detailLabel: parsed.detail,
+            timestamp: Date.now()
+        });
+    }
+
+    parseMidiMessage(bytes) {
+        const status = bytes[0] || 0;
+        const data1 = bytes[1] || 0;
+        const data2 = bytes[2] || 0;
+
+        if (status >= 0xF0) {
+            if (status === 0xF8) {
+                return { typeClass: 'midi-type-system', label: 'clock', detail: '' };
+            }
+            return { typeClass: 'midi-type-system', label: 'system', detail: `status ${status}` };
+        }
+
+        const command = status & 0xF0;
+        const channel = (status & 0x0F) + 1;
+
+        if (command === 0x80 || (command === 0x90 && data2 === 0)) {
+            return {
+                typeClass: 'midi-type-note-off',
+                label: 'note off',
+                detail: `ch ${channel} note ${data1} vel ${data2}`
+            };
+        }
+
+        if (command === 0x90) {
+            return {
+                typeClass: 'midi-type-note-on',
+                label: 'note on',
+                detail: `ch ${channel} note ${data1} vel ${data2}`
+            };
+        }
+
+        if (command === 0xA0) {
+            return {
+                typeClass: 'midi-type-poly-aftertouch',
+                label: 'poly aftertouch',
+                detail: `ch ${channel} note ${data1} pressure ${data2}`
+            };
+        }
+
+        if (command === 0xB0) {
+            return {
+                typeClass: 'midi-type-control-change',
+                label: 'cc',
+                detail: `ch ${channel} cc ${data1} val ${data2}`
+            };
+        }
+
+        if (command === 0xC0) {
+            return {
+                typeClass: 'midi-type-program-change',
+                label: 'program',
+                detail: `ch ${channel} program ${data1}`
+            };
+        }
+
+        if (command === 0xD0) {
+            return {
+                typeClass: 'midi-type-channel-pressure',
+                label: 'channel pressure',
+                detail: `ch ${channel} pressure ${data1}`
+            };
+        }
+
+        if (command === 0xE0) {
+            const value = ((data2 << 7) | data1) - 8192;
+            return {
+                typeClass: 'midi-type-pitch-bend',
+                label: 'pitch bend',
+                detail: `ch ${channel} value ${value}`
+            };
+        }
+
+        return {
+            typeClass: 'midi-type-system',
+            label: 'midi',
+            detail: `status ${status}`
+        };
+    }
+
+    appendMidiSystemLine(text) {
+        this.appendMidiLogLine({
+            typeClass: 'midi-type-system',
+            typeLabel: 'system',
+            detailLabel: String(text || ''),
+            timestamp: Date.now()
+        });
+    }
+
+    appendMidiDetailText(detailElement, detailLabel) {
+        const raw = String(detailLabel || '');
+        if (!raw) return;
+
+        const highlightPattern = /(\b(?:ch|note|vel)\s+)(\d+)/g;
+        let cursor = 0;
+        let match = null;
+
+        while ((match = highlightPattern.exec(raw)) !== null) {
+            const [fullMatch, prefix, value] = match;
+            const start = match.index;
+            if (start > cursor) {
+                detailElement.appendChild(document.createTextNode(raw.slice(cursor, start)));
+            }
+
+            detailElement.appendChild(document.createTextNode(prefix));
+
+            const strong = document.createElement('strong');
+            strong.textContent = value;
+            detailElement.appendChild(strong);
+
+            cursor = start + fullMatch.length;
+        }
+
+        if (cursor < raw.length) {
+            detailElement.appendChild(document.createTextNode(raw.slice(cursor)));
+        }
+    }
+
+    appendMidiLogLine({ typeClass, typeLabel, detailLabel, timestamp }) {
+        const log = this.elements.midiMonitorLog;
+        if (!log) return;
+
+        const line = document.createElement('div');
+        line.className = 'midi-line';
+
+        const time = document.createElement('span');
+        time.className = 'midi-line-time';
+        const when = new Date(Number(timestamp) || Date.now());
+        const hh = String(when.getHours()).padStart(2, '0');
+        const mm = String(when.getMinutes()).padStart(2, '0');
+        const ss = String(when.getSeconds()).padStart(2, '0');
+        time.textContent = `${hh}:${mm}:${ss} `;
+        line.appendChild(time);
+
+        const type = document.createElement('span');
+        type.className = typeClass || 'midi-type-system';
+        type.textContent = `${typeLabel || 'midi'} `;
+        line.appendChild(type);
+
+        const detail = document.createElement('span');
+        detail.className = 'midi-line-meta';
+        this.appendMidiDetailText(detail, detailLabel);
+        line.appendChild(detail);
+
+        log.appendChild(line);
+
+        while (log.childElementCount > this.midiLogLimit) {
+            log.removeChild(log.firstChild);
+        }
+
+        log.scrollTop = log.scrollHeight;
     }
 
     handleReplInput(event) {
