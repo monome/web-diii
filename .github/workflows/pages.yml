@@ -7,9 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages-production
@@ -18,22 +16,46 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          fetch-depth: 0
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish main site to gh-pages root
+        run: |
+          set -euo pipefail
+
+          PUBLISH_BRANCH="gh-pages"
+          TMP_DIR="$(mktemp -d)"
+
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='README.md' \
+            --exclude='LICENSE' \
+            --exclude='TODO' \
+            ./ "$TMP_DIR/site/"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin "$PUBLISH_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$PUBLISH_BRANCH"
+            git checkout -B "$PUBLISH_BRANCH" "origin/$PUBLISH_BRANCH"
+          else
+            git checkout --orphan "$PUBLISH_BRANCH"
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name 'previews' -exec rm -rf {} +
+          rsync -a --delete "$TMP_DIR/site/" ./
+
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git add -A
+            git commit -m "Deploy main site (${GITHUB_SHA::7})"
+            git push origin "$PUBLISH_BRANCH"
+          else
+            echo "No production site changes to publish."
+          fi
