@@ -17,4 +17,4 @@ This repo includes GitHub Actions workflows for Pages:
 Notes:
 
 - PR preview deployments run only for PRs from branches in this repository (not forks).
-- The preview URL is shown in the PR checks/deployment details.
+- The preview URL is shown in a PR comment after new commits are pushed.
