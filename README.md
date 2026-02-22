@@ -7,7 +7,7 @@ to run locally run this in the web-diii root directory then browse to localhost:
 python3 -m http.server 8000
 ```
 
-## GitHub Pages deployment
+## GitHub Pages deployment (Not enabled until repo is made public)
 
 This repo includes GitHub Actions workflows for Pages:
 
