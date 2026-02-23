@@ -49,7 +49,7 @@ jobs:
             git rm -rf . >/dev/null 2>&1 || true
           fi
 
-          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name 'previews' -exec rm -rf {} +
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name 'preview' -exec rm -rf {} +
           rsync -a --delete "$TMP_DIR/site/" ./
 
           if [[ -n "$(git status --porcelain)" ]]; then
