@@ -118,17 +118,30 @@ jobs:
 
               const existing = comments.find(
                 (comment) =>
-                  comment.user?.type === 'Bot' &&
+                  comment.user?.login === 'github-actions[bot]' &&
                   comment.body?.includes(marker)
               );
 
               if (existing) {
-                await github.rest.issues.updateComment({
-                  owner,
-                  repo,
-                  comment_id: existing.id,
-                  body,
-                });
+                try {
+                  await github.rest.issues.updateComment({
+                    owner,
+                    repo,
+                    comment_id: existing.id,
+                    body,
+                  });
+                } catch (updateError) {
+                  if (updateError.status === 403) {
+                    await github.rest.issues.createComment({
+                      owner,
+                      repo,
+                      issue_number,
+                      body,
+                    });
+                  } else {
+                    throw updateError;
+                  }
+                }
               } else {
                 await github.rest.issues.createComment({
                   owner,
@@ -139,7 +152,8 @@ jobs:
               }
             } catch (error) {
               if (error.status === 403) {
-                core.warning('Skipping PR comment: GITHUB_TOKEN does not have write permission for issue comments in this run.');
+                const accepted = error.response?.headers?.['x-accepted-github-permissions'] || 'unknown';
+                core.warning(`Skipping PR comment: ${error.message}. Accepted token permissions for this request: ${accepted}`);
               } else {
                 throw error;
               }
