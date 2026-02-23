@@ -82,6 +82,15 @@ jobs:
             echo "No preview changes to publish."
           fi
 
+      - name: Publish preview URL to workflow summary
+        if: ${{ github.event.action != 'closed' }}
+        run: |
+          echo "### PR Preview URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "${PREVIEW_URL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=PR Preview URL::${PREVIEW_URL}"
+
       - name: Comment preview URL on PR
         if: ${{ github.event.action != 'closed' }}
         continue-on-error: true
