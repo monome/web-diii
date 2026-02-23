@@ -432,7 +432,7 @@ body.is-resizing-midi * {
 .midi-monitor-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 8px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--neutral-trim);
@@ -442,17 +442,16 @@ body.is-resizing-midi * {
     font-size: 0.85rem;
     text-transform: lowercase;
     color: var(--neutral-heavy);
+    margin-right: auto;
 }
 
-.midi-clear-btn {
+.midi-close-btn {
     padding: 4px 8px;
-    font-size: 0.75rem;
-}
-
-.midi-audio-btn {
-    margin-left: auto;
-    padding: 4px 8px;
-    font-size: 0.75rem;
+    font-size: 0.8rem;
+    text-transform: lowercase;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .midi-monitor-status {
@@ -530,11 +529,63 @@ body.is-resizing-midi * {
     word-break: break-word;
 }
 
-.output-cleanup-btn {
+.output-controls {
     position: absolute;
     right: 12px;
     top: 12px;
     z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.output-cleanup-btn {
+    position: static;
+}
+
+.output-audio-toggle-btn {
+    position: static;
+    height: 29px;
+    min-width: 122px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.audio-toggle-switch {
+    width: 28px;
+    height: 14px;
+    border: 1px solid var(--neutral-trim);
+    border-radius: 999px;
+    background-color: var(--bg-default);
+    display: inline-flex;
+    align-items: center;
+    padding: 1px;
+    transition: border-color 0.2s;
+}
+
+.audio-toggle-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: var(--interactive-medium);
+    transform: translateX(0);
+    transition: transform 0.2s, background-color 0.2s;
+}
+
+.output-audio-toggle-btn.is-on .audio-toggle-thumb {
+    transform: translateX(14px);
+    background-color: var(--accent-hover);
+}
+
+.output-audio-toggle-btn.is-on .audio-toggle-switch {
+    border-color: var(--accent-hover);
+}
+
+.audio-toggle-state {
+    font-size: 0.85rem;
+    line-height: 1;
 }
 
 .repl-output a {
@@ -553,6 +604,41 @@ body.is-resizing-midi * {
 
 .repl-actions-spacer {
     flex: 1;
+}
+
+.midi-monitor-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.midi-activity-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background-color: var(--neutral-medium);
+    opacity: 0.65;
+    flex-shrink: 0;
+}
+
+.midi-activity-dot.is-flashing {
+    background-color: var(--accent-hover);
+    animation: midi-activity-pulse 220ms ease-out;
+}
+
+@keyframes midi-activity-pulse {
+    0% {
+        transform: scale(1);
+        opacity: 0.65;
+    }
+    50% {
+        transform: scale(1.35);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 0.8;
+    }
 }
 
 .repl-status-pill {

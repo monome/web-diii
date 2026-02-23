@@ -244,6 +244,7 @@ class DruidApp {
         this.midiResizePointerId = null;
         this.midiResizeStartX = 0;
         this.midiResizeStartWidth = this.midiWidthDefault;
+        this.midiActivityFlashTimer = null;
 
         this.cacheElements();
         this.bindEvents();
@@ -255,7 +256,7 @@ class DruidApp {
         this.updateMidiAudioButton();
         this.updateMidiMonitorStatus('closed');
 
-        this.outputLine('//// welcome. connect to an iii compatible grid or arc to begin.');
+        this.outputLine('//// welcome. connect to an iii compatible device to begin.');
     }
 
     cacheElements() {
@@ -285,12 +286,14 @@ class DruidApp {
             reformatBtn: document.getElementById('reformatBtn'),
             clearBtn: document.getElementById('clearBtn'),
             midiMonitorToggleBtn: document.getElementById('midiMonitorToggleBtn'),
+            midiMonitorToggleLabel: document.getElementById('midiMonitorToggleLabel'),
+            midiActivityDot: document.getElementById('midiActivityDot'),
             midiResizer: document.getElementById('midiResizer'),
             midiMonitorPane: document.getElementById('midiMonitorPane'),
             midiMonitorStatus: document.getElementById('midiMonitorStatus'),
             midiMonitorLog: document.getElementById('midiMonitorLog'),
             midiAudioToggleBtn: document.getElementById('midiAudioToggleBtn'),
-            midiClearBtn: document.getElementById('midiClearBtn'),
+            midiCloseBtn: document.getElementById('midiCloseBtn'),
 
             fileInput: document.getElementById('fileInput'),
 
@@ -320,7 +323,7 @@ class DruidApp {
         on(this.elements.midiResizer, 'pointerdown', (e) => this.startMidiResize(e));
         on(this.elements.midiResizer, 'keydown', (e) => this.handleMidiResizerKeydown(e));
         on(this.elements.midiAudioToggleBtn, 'click', () => this.toggleMidiAudioMute());
-        on(this.elements.midiClearBtn, 'click', () => this.clearMidiMonitorLog());
+        on(this.elements.midiCloseBtn, 'click', () => this.closeMidiMonitor());
         on(this.elements.fileInput, 'change', (e) => this.handleFileSelect(e));
         on(document, 'click', (e) => this.handleDocumentClick(e));
 
@@ -600,7 +603,9 @@ class DruidApp {
         }
 
         if (this.elements.midiMonitorToggleBtn) {
-            this.elements.midiMonitorToggleBtn.textContent = this.midiMonitorVisible ? 'hide midi' : 'midi';
+            if (this.elements.midiMonitorToggleLabel) {
+                this.elements.midiMonitorToggleLabel.textContent = 'midi';
+            }
             this.elements.midiMonitorToggleBtn.setAttribute('aria-expanded', String(this.midiMonitorVisible));
         }
 
@@ -763,8 +768,19 @@ class DruidApp {
 
     updateMidiAudioButton() {
         if (!this.elements.midiAudioToggleBtn) return;
-        this.elements.midiAudioToggleBtn.textContent = this.midiAudioMuted ? 'unmute' : 'mute';
-        this.elements.midiAudioToggleBtn.setAttribute('aria-pressed', String(!this.midiAudioMuted));
+        const isOn = !this.midiAudioMuted;
+        const nextActionLabel = this.midiAudioMuted ? 'unmute midi monitor audio' : 'mute midi monitor audio';
+        const stateLabel = isOn ? 'audio on' : 'audio off';
+        this.elements.midiAudioToggleBtn.classList.toggle('is-on', isOn);
+
+        const stateElement = this.elements.midiAudioToggleBtn.querySelector('.audio-toggle-state');
+        if (stateElement) {
+            stateElement.textContent = stateLabel;
+        }
+
+        this.elements.midiAudioToggleBtn.setAttribute('aria-label', nextActionLabel);
+        this.elements.midiAudioToggleBtn.setAttribute('title', nextActionLabel);
+        this.elements.midiAudioToggleBtn.setAttribute('aria-pressed', String(isOn));
     }
 
     async toggleMidiAudioMute() {
@@ -774,6 +790,15 @@ class DruidApp {
                 this.appendMidiSystemLine('audio unavailable in this browser');
                 return;
             }
+
+            if (!this.midiAccess) {
+                const midiReady = await this.initializeMidiAccess();
+                if (!midiReady) {
+                    this.appendMidiSystemLine('audio monitor requires midi permission');
+                    return;
+                }
+            }
+
             this.midiAudioMuted = false;
             this.updateMidiAudioButton();
             this.appendMidiSystemLine('audio monitor unmuted');
@@ -821,8 +846,7 @@ class DruidApp {
         voice.gain.gain.setValueAtTime(current, now);
         voice.gain.gain.exponentialRampToValueAtTime(0.0001, endAt);
 
-        voice.osc1.stop(endAt + 0.01);
-        voice.osc2.stop(endAt + 0.01);
+        voice.osc.stop(endAt + 0.01);
         this.midiActiveVoices.delete(key);
     }
 
@@ -843,34 +867,23 @@ class DruidApp {
 
         this.stopMidiVoice(channel, note, 0.02);
 
-        const osc1 = this.midiAudioContext.createOscillator();
-        const osc2 = this.midiAudioContext.createOscillator();
-        const filter = this.midiAudioContext.createBiquadFilter();
+        const osc = this.midiAudioContext.createOscillator();
         const gain = this.midiAudioContext.createGain();
 
-        osc1.type = 'triangle';
-        osc2.type = 'sine';
-        osc1.frequency.setValueAtTime(frequency, now);
-        osc2.frequency.setValueAtTime(frequency * 2, now);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(frequency, now);
 
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(1900, now);
-        filter.Q.setValueAtTime(0.8, now);
-
-        const velocityGain = 0.08 + ((clampedVelocity / 127) * 0.22);
+        const velocityGain = 0.05 + ((clampedVelocity / 127) * 0.18);
         gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.linearRampToValueAtTime(velocityGain, now + 0.006);
-        gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, velocityGain * 0.45), now + 0.36);
+        gain.gain.linearRampToValueAtTime(velocityGain, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, velocityGain * 0.6), now + 0.24);
 
-        osc1.connect(filter);
-        osc2.connect(filter);
-        filter.connect(gain);
+        osc.connect(gain);
         gain.connect(this.midiAudioContext.destination);
 
-        osc1.start(now);
-        osc2.start(now);
+        osc.start(now);
 
-        this.midiActiveVoices.set(key, { osc1, osc2, gain });
+        this.midiActiveVoices.set(key, { osc, gain });
     }
 
     handleMidiAudioMessage(bytes) {
@@ -897,10 +910,7 @@ class DruidApp {
     }
 
     async toggleMidiMonitor() {
-        if (this.midiMonitorVisible) {
-            this.setMidiMonitorVisible(false);
-            return;
-        }
+        if (this.midiMonitorVisible) return;
 
         this.setMidiMonitorVisible(true);
 
@@ -915,6 +925,10 @@ class DruidApp {
         }
 
         this.updateMidiMonitorStatus(this.getMidiInputsSummary());
+    }
+
+    closeMidiMonitor() {
+        this.setMidiMonitorVisible(false);
     }
 
     async initializeMidiAccess() {
@@ -932,7 +946,7 @@ class DruidApp {
             this.midiAccess.onstatechange = (event) => this.handleMidiStateChange(event);
             this.attachMidiInputHandlers();
             this.updateMidiMonitorStatus(this.getMidiInputsSummary());
-            this.appendMidiSystemLine('MIDI monitor ready. Listening for incoming messages...');
+            this.appendMidiSystemLine('MIDI monitor ready.');
             return true;
         } catch (error) {
             const reason = String(error?.message || error || 'permission denied');
@@ -987,8 +1001,8 @@ class DruidApp {
     getMidiInputsSummary() {
         if (!this.midiAccess) return 'midi unavailable';
         const count = this.midiInputNames.size;
-        if (count === 0) return 'connected: no iii midi inputs found';
-        if (count === 1) return `connected: 1 iii midi input (${[...this.midiInputNames][0] || 'unnamed'})`;
+        if (count === 0) return 'no iii midi inputs found';
+        if (count === 1) return `connected: iii midi input (${[...this.midiInputNames][0] || 'unnamed'})`;
         return `connected: ${count} iii midi inputs`;
     }
 
@@ -996,6 +1010,7 @@ class DruidApp {
         if (!event?.data || event.data.length === 0) return;
 
         const bytes = Array.from(event.data);
+        this.flashMidiActivityDot();
         this.handleMidiAudioMessage(bytes);
         const parsed = this.parseMidiMessage(bytes);
         this.appendMidiLogLine({
@@ -1004,6 +1019,24 @@ class DruidApp {
             detailLabel: parsed.detail,
             timestamp: Date.now()
         });
+    }
+
+    flashMidiActivityDot() {
+        const dot = this.elements.midiActivityDot;
+        if (!dot) return;
+
+        dot.classList.remove('is-flashing');
+        void dot.offsetWidth;
+        dot.classList.add('is-flashing');
+
+        if (this.midiActivityFlashTimer) {
+            clearTimeout(this.midiActivityFlashTimer);
+        }
+
+        this.midiActivityFlashTimer = setTimeout(() => {
+            dot.classList.remove('is-flashing');
+            this.midiActivityFlashTimer = null;
+        }, 260);
     }
 
     parseMidiMessage(bytes) {

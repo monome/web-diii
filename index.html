@@ -46,7 +46,19 @@
                         <div class="repl-content">
                             <div class="repl-output-area">
                                 <div id="output" class="repl-output"></div>
-                                <button id="clearBtn" class="repl-action-btn output-cleanup-btn">clean</button>
+                                <div class="output-controls">
+                                    <button id="midiMonitorToggleBtn" class="repl-action-btn midi-monitor-toggle-btn" aria-expanded="false" aria-controls="midiMonitorPane">
+                                        <span id="midiActivityDot" class="midi-activity-dot" aria-hidden="true"></span>
+                                        <span id="midiMonitorToggleLabel">midi</span>
+                                    </button>
+                                    <button id="midiAudioToggleBtn" class="repl-action-btn output-audio-toggle-btn" aria-label="unmute midi monitor audio" title="unmute midi monitor audio" aria-pressed="false">
+                                        <span class="audio-toggle-switch" aria-hidden="true">
+                                            <span class="audio-toggle-thumb"></span>
+                                        </span>
+                                        <span class="audio-toggle-state">audio off</span>
+                                    </button>
+                                    <button id="clearBtn" class="repl-action-btn output-cleanup-btn">clean</button>
+                                </div>
                             </div>
                             <div class="repl-actions">
                                 <button id="replConnectionBtn" class="repl-connection-btn" title="connect/disconnect (Cmd/Ctrl+Shift+C)">connect</button>
@@ -55,7 +67,6 @@
                                 <button id="bootloaderBtn" class="repl-action-btn">bootloader</button>
                                 <button id="reformatBtn" class="repl-action-btn">reformat</button>
                                 <div class="repl-actions-spacer"></div>
-                                <button id="midiMonitorToggleBtn" class="repl-action-btn" aria-expanded="false" aria-controls="midiMonitorPane">midi</button>
                             </div>
                             <div class="repl-input-container">
                                 <div class="repl-input-row">
@@ -68,8 +79,7 @@
                         <aside id="midiMonitorPane" class="midi-monitor-pane hidden" aria-hidden="true">
                             <div class="midi-monitor-header">
                                 <span class="midi-monitor-title">midi monitor</span>
-                                <button id="midiAudioToggleBtn" class="repl-action-btn midi-audio-btn">unmute</button>
-                                <button id="midiClearBtn" class="repl-action-btn midi-clear-btn">clean</button>
+                                <button id="midiCloseBtn" class="repl-action-btn midi-close-btn" aria-label="close midi monitor" title="close midi monitor">close</button>
                             </div>
                             <div id="midiMonitorStatus" class="midi-monitor-status">closed</div>
                             <div id="midiMonitorLog" class="midi-monitor-log" aria-live="polite"></div>
