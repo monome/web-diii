@@ -1694,13 +1694,11 @@ class DruidApp {
         this.outputLine(' Cmd/Ctrl+Shift+C  connect/disconnect');
         this.outputLine('');
         this.outputLine(' common iii commands:');
-        this.outputLine(' ^^p          print active script');
-        this.outputLine(' ^^c          clear active script');
-        this.outputLine(' ^^r          reboot device');
-        this.outputLine(' ^^b          reboot into bootloader mode');
-        this.outputLine(' ^^g          print name of active script');
+        this.outputLine(' ^^i          init');
+        this.outputLine(' ^^c          clean init');
+        this.outputLine(' help()       print iii api');
         this.outputLine('');
-        this.outputHTML('Docs: <a href="https://monome.org/docs/iii/" target="_blank" rel="noopener noreferrer">monome.org/docs/iii</a>\n');
+        this.outputHTML('Docs: <a href="https://monome.org/docs/iii/code" target="_blank" rel="noopener noreferrer">monome.org/docs/iii/code</a>\n');
        
     }
 
