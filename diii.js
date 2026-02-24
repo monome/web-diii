@@ -214,7 +214,7 @@ class DruidApp {
         this.toastTimer = null;
         this.toastElement = null;
         this.fileEntries = [];
-        this.firstEquivalentFileNames = new Set();
+        this.firstBadgeFileNames = new Set();
         this.fileFreeSpaceBytes = null;
         this.openMenuFile = null;
         this.isExplorerCollapsed = true;
@@ -1209,11 +1209,11 @@ class DruidApp {
 
             main.appendChild(label);
 
-            if (entry.name !== 'init.lua' && this.firstEquivalentFileNames.has(entry.name)) {
+            if (entry.name !== 'init.lua' && this.firstBadgeFileNames.has(entry.name)) {
                 const firstBadge = document.createElement('span');
                 firstBadge.className = 'file-first-pill';
                 firstBadge.textContent = 'first';
-                firstBadge.setAttribute('aria-label', `${entry.name} matches init.lua`);
+                firstBadge.setAttribute('aria-label', `${entry.name} is configured in init.lua`);
                 main.appendChild(firstBadge);
             }
 
@@ -1231,21 +1231,29 @@ class DruidApp {
             const menu = document.createElement('div');
             menu.className = `file-menu${this.openMenuFile === entry.name ? ' open' : ''}`;
 
-            const actions = (isLibFile
+            const isInitLuaFile = entry.name === 'init.lua';
+
+            const actions = (isInitLuaFile
                 ? [
                     { label: 'read', fn: () => this.showFile(entry.name) },
-                    { label: 'run', fn: () => this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true }) },
-                    { label: 'download', fn: () => this.downloadFile(entry.name) },
-                    { label: 'delete', fn: () => this.deleteFile(entry.name) }
-                ]
-                : [
-                    { label: 'first', fn: () => this.configureFirst(entry.name) },
-                    { label: 'read', fn: () => this.showFile(entry.name) },
-                    { label: 'run', fn: () => this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true }) },
-                    { label: 'download', fn: () => this.downloadFile(entry.name) },
                     { label: 'rename', fn: () => this.renameFile(entry.name) },
                     { label: 'delete', fn: () => this.deleteFile(entry.name) }
-                ])
+                ]
+                : isLibFile
+                    ? [
+                        { label: 'read', fn: () => this.showFile(entry.name) },
+                        { label: 'run', fn: () => this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true }) },
+                        { label: 'download', fn: () => this.downloadFile(entry.name) },
+                        { label: 'delete', fn: () => this.deleteFile(entry.name) }
+                    ]
+                    : [
+                        { label: 'first', fn: () => this.configureFirst(entry.name) },
+                        { label: 'read', fn: () => this.showFile(entry.name) },
+                        { label: 'run', fn: () => this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true }) },
+                        { label: 'download', fn: () => this.downloadFile(entry.name) },
+                        { label: 'rename', fn: () => this.renameFile(entry.name) },
+                        { label: 'delete', fn: () => this.deleteFile(entry.name) }
+                    ])
                 .sort((a, b) => {
                     const priorityOf = (label) => {
                         if (label === 'run') return 0;
@@ -1411,7 +1419,7 @@ class DruidApp {
     async refreshFileList() {
         if (!this.iiiDevice.isConnected) {
             this.fileEntries = [];
-            this.firstEquivalentFileNames = new Set();
+            this.firstBadgeFileNames = new Set();
             this.fileFreeSpaceBytes = null;
             this.updateFileSpaceFooter(null);
             this.renderFileList();
@@ -1441,9 +1449,9 @@ class DruidApp {
             this.fileEntries = entries;
 
             try {
-                await this.refreshFirstEquivalentFileNames(entries);
+                await this.refreshFirstBadgeFileNames(entries);
             } catch {
-                this.firstEquivalentFileNames = new Set();
+                this.firstBadgeFileNames = new Set();
             }
 
             try {
@@ -1455,42 +1463,40 @@ class DruidApp {
             this.updateFileSpaceFooter(this.fileFreeSpaceBytes);
             this.renderFileList();
         } catch (error) {
-            this.firstEquivalentFileNames = new Set();
+            this.firstBadgeFileNames = new Set();
             this.fileFreeSpaceBytes = null;
             this.updateFileSpaceFooter(null);
             this.outputLine(`File list error: ${error.message}`);
         }
     }
 
-    async refreshFirstEquivalentFileNames(entries) {
+    getFirstRunFileTargetFromInit(initContent) {
+        const content = String(initContent || '');
+        const withoutBlockComments = content.replace(/--\[\[[\s\S]*?\]\]/g, '');
+        const withoutLineComments = withoutBlockComments.replace(/--.*$/gm, '');
+        const match = withoutLineComments.match(/fs_run_file\s*\(\s*(['"])([^'"]+)\1\s*\)/);
+        return match?.[2]?.trim() || '';
+    }
+
+    async refreshFirstBadgeFileNames(entries) {
         const hasInitLua = entries.some((entry) => entry.name === 'init.lua');
         if (!hasInitLua) {
-            this.firstEquivalentFileNames = new Set();
+            this.firstBadgeFileNames = new Set();
             return;
         }
 
-        const candidateNames = entries
-            .map((entry) => entry.name)
-            .filter((name) => name !== 'init.lua');
+        const initContent = await this.readRemoteFile('init.lua');
+        const targetName = this.getFirstRunFileTargetFromInit(initContent);
 
-        if (candidateNames.length === 0) {
-            this.firstEquivalentFileNames = new Set();
+        if (!targetName) {
+            this.firstBadgeFileNames = new Set();
             return;
         }
 
-        const luaList = candidateNames.map((name) => this.luaQuote(name)).join(', ');
-        const lines = await this.executeLuaCapture(
-            `local function __norm(__s) if not __s then return nil end return (__s:gsub("%z+$", "")) end local __init = __norm(fs_read_file('init.lua')); if __init then for _, __name in ipairs({${luaList}}) do local __data = __norm(fs_read_file(__name)); if __data and __data == __init then print("__webdiii_firsteq\\t" .. __name) end end end`
-        );
-
-        const matches = new Set();
-        for (const line of lines) {
-            if (!line.startsWith('__webdiii_firsteq\t')) continue;
-            const name = line.split('\t')[1];
-            if (name) matches.add(name);
-        }
-
-        this.firstEquivalentFileNames = matches;
+        const hasMatchingFile = entries.some((entry) => entry.name === targetName);
+        this.firstBadgeFileNames = hasMatchingFile
+            ? new Set([targetName])
+            : new Set();
     }
 
     async readRemoteFile(fileName) {
