@@ -1191,16 +1191,18 @@ class DruidApp {
             main.className = 'file-main';
             const isLibFile = entry.name === 'lib.lua';
 
-            const playBtn = document.createElement('button');
-            playBtn.className = `file-play-btn${this.activeFileName === entry.name ? ' active' : ''}`;
-            playBtn.type = 'button';
-            playBtn.textContent = '▶';
-            playBtn.setAttribute('aria-label', `run ${entry.name}`);
-            playBtn.addEventListener('click', async (event) => {
-                event.stopPropagation();
-                await this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true });
-            });
-            main.appendChild(playBtn);
+            if (!isLibFile) {
+                const playBtn = document.createElement('button');
+                playBtn.className = `file-play-btn${this.activeFileName === entry.name ? ' active' : ''}`;
+                playBtn.type = 'button';
+                playBtn.textContent = '▶';
+                playBtn.setAttribute('aria-label', `run ${entry.name}`);
+                playBtn.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    await this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true });
+                });
+                main.appendChild(playBtn);
+            }
 
             const label = document.createElement('div');
             label.className = 'file-label';
@@ -1241,9 +1243,7 @@ class DruidApp {
                 : isLibFile
                     ? [
                         { label: 'read', fn: () => this.showFile(entry.name) },
-                        { label: 'run', fn: () => this.enqueueRunFile(entry.name, { prepRuntimeWithLib: true }) },
-                        { label: 'download', fn: () => this.downloadFile(entry.name) },
-                        { label: 'delete', fn: () => this.deleteFile(entry.name) }
+                        { label: 'download', fn: () => this.downloadFile(entry.name) }
                     ]
                     : [
                         { label: 'first', fn: () => this.configureFirst(entry.name) },
