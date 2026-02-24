@@ -1387,21 +1387,17 @@ class DruidApp {
         try {
             const lines = await this.executeLuaCapture([
                 'print("__webdiii_ls_begin")',
-                'print(fs_list_files())',
+                'for _, __name in ipairs(fs_list_files()) do local __size = fs_file_size(__name) or 0; print("__webdiii_file\\t" .. __name .. "\\t" .. tostring(__size)) end',
                 'print("__webdiii_ls_end")',
-                'print("__webdiii_free\t" .. tostring(fs_free_space() or 0))'
+                'print("__webdiii_mem_begin")',
+                'mem()',
+                'print("__webdiii_mem_end")'
             ]);
 
             const lsLines = this.extractLinesBetweenMarkers(lines, '__webdiii_ls_begin', '__webdiii_ls_end');
+            const memLines = this.extractLinesBetweenMarkers(lines, '__webdiii_mem_begin', '__webdiii_mem_end');
             const entries = this.parseFileEntriesFromLs(lsLines);
-            this.fileFreeSpaceBytes = null;
-
-            for (const line of lines) {
-                if (!line.startsWith('__webdiii_free\t')) continue;
-                const freeRaw = line.split('\t')[1];
-                this.fileFreeSpaceBytes = Number.parseInt(freeRaw, 10);
-                break;
-            }
+            this.fileFreeSpaceBytes = this.parseMemoryFooterFromMem(memLines);
 
             this.fileEntries = entries;
 
@@ -1425,7 +1421,7 @@ class DruidApp {
         const content = String(initContent || '');
         const withoutBlockComments = content.replace(/--\[\[[\s\S]*?\]\]/g, '');
         const withoutLineComments = withoutBlockComments.replace(/--.*$/gm, '');
-        const match = withoutLineComments.match(/fs_run_file\s*\(\s*(['"])([^'"]+)\1\s*\)/);
+        const match = withoutLineComments.match(/first\s*\(\s*(['"])([^'"]+)\1\s*\)/);
         return match?.[2]?.trim() || '';
     }
 
@@ -1456,7 +1452,27 @@ class DruidApp {
         const seenNames = new Set();
 
         for (const rawLine of lines) {
-            const tokens = String(rawLine || '').trim().split(/\s+/).filter(Boolean);
+            const line = String(rawLine || '').trim();
+
+            if (line.startsWith('__webdiii_file\t')) {
+                const parts = line.split('\t');
+                if (parts.length >= 3) {
+                    const name = String(parts[1] || '').trim();
+                    const isLua = name.toLowerCase().endsWith('.lua');
+                    const isInit = name === 'init';
+                    if (!isLua && !isInit) continue;
+                    if (seenNames.has(name)) continue;
+                    seenNames.add(name);
+                    const parsedSize = Number.parseInt(parts[2], 10);
+                    entries.push({
+                        name,
+                        size: Number.isFinite(parsedSize) ? parsedSize : null
+                    });
+                    continue;
+                }
+            }
+
+            const tokens = line.split(/\s+/).filter(Boolean);
             for (const token of tokens) {
                 const cleaned = token.replace(/[,:;]+$/, '');
                 const isLua = cleaned.toLowerCase().endsWith('.lua');
@@ -1507,24 +1523,13 @@ class DruidApp {
     }
 
     async readRemoteFile(fileName) {
-        const lines = await this.executeLuaCapture(`print(fs_read_file(${this.luaQuote(fileName)}))`);
+        const lines = await this.executeLuaCapture(`cat(${this.luaQuote(fileName)})`);
         return lines.join('\n');
     }
 
     async configureFirst(fileName) {
         try {
-            const normalizedName = String(fileName || '').trim();
-            if (!normalizedName) {
-                await this.executeLuaCapture('fs_remove_file("init.lua")');
-                this.outputLine('startup file cleared');
-                await this.refreshFileList();
-                return;
-            }
-
-            const initContent = `fs_run_file(${this.luaQuote(normalizedName)})`;
-            await this.executeLuaCapture(
-                `fs_write_file("init.lua", ${this.luaQuote(initContent)})`
-            );
+            await this.executeLuaCapture(`first(${this.luaQuote(fileName)})`);
             this.outputLine(`${fileName} will now run at at startup`);
             await this.refreshFileList();
         } catch (error) {
@@ -1566,7 +1571,7 @@ class DruidApp {
             afterHeaderSpacerLine.textContent = '\n';
             this.elements.output.appendChild(afterHeaderSpacerLine);
 
-            const lines = await this.executeLuaCapture(`print(fs_read_file(${this.luaQuote(fileName)}))`);
+            const lines = await this.executeLuaCapture(`cat(${this.luaQuote(fileName)})`);
             for (const line of lines) {
                 this.outputLine(line, { autoScroll: false });
             }
@@ -1612,7 +1617,7 @@ class DruidApp {
         }
 
         try {
-            await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(fileName)})`);
+            await this.executeLuaCapture(`rm(${this.luaQuote(fileName)})`);
             this.outputLine(`Deleted ${fileName}`);
             await this.refreshFileList();
         } catch (error) {
@@ -1685,8 +1690,8 @@ class DruidApp {
         }
 
         try {
-            this.outputLine('> fs_reformat()');
             await this.executeLuaCapture('fs_reformat()');
+            this.outputLine('Filesystem reformatted.');
             await this.refreshFileList();
         } catch (error) {
             this.outputLine(`Reformat error: ${error.message}`);
