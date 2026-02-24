@@ -1146,7 +1146,6 @@ class DruidApp {
             this.setExplorerCollapsed(false);
             const text = await file.text();
             await this.uploadTextAsScript(file.name, text);
-            await this.enqueueRunFile(file.name, { prepRuntimeWithLib: true });
         } catch (error) {
             this.outputLine(`Upload error: ${error.message}`);
         }
@@ -1688,7 +1687,6 @@ class DruidApp {
 
             const text = await file.text();
             await this.uploadTextAsScript(file.name, text);
-            await this.enqueueRunFile(file.name, { prepRuntimeWithLib: true });
         });
     }
 
