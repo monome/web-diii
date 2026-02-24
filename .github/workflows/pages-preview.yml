@@ -9,10 +9,11 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-      - closed
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
   issues: write
 
 concurrency:
@@ -25,86 +26,48 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     runs-on: ubuntu-latest
-    env:
-      PREVIEW_PATH: preview/pr-${{ github.event.pull_request.number }}
-      PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/preview/pr-${{ github.event.pull_request.number }}/
+    environment:
+      name: github-pages-preview
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          fetch-depth: 0
+          path: .
 
-      - name: Publish PR preview path to gh-pages
-        run: |
-          set -euo pipefail
-
-          PUBLISH_BRANCH="gh-pages"
-          TMP_DIR="$(mktemp -d)"
-
-          if [[ "${{ github.event.action }}" != "closed" ]]; then
-            rsync -a \
-              --exclude='.git' \
-              --exclude='.github' \
-              --exclude='README.md' \
-              --exclude='LICENSE' \
-              --exclude='TODO' \
-              ./ "$TMP_DIR/site/"
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if git ls-remote --exit-code --heads origin "$PUBLISH_BRANCH" >/dev/null 2>&1; then
-            git fetch origin "$PUBLISH_BRANCH"
-            git checkout -B "$PUBLISH_BRANCH" "origin/$PUBLISH_BRANCH"
-          else
-            git checkout --orphan "$PUBLISH_BRANCH"
-            git rm -rf . >/dev/null 2>&1 || true
-          fi
-
-          mkdir -p "$(dirname "$PREVIEW_PATH")"
-
-          if [[ "${{ github.event.action }}" == "closed" ]]; then
-            rm -rf "$PREVIEW_PATH"
-          else
-            mkdir -p "$PREVIEW_PATH"
-            rsync -a --delete "$TMP_DIR/site/" "$PREVIEW_PATH/"
-          fi
-
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git add -A
-            if [[ "${{ github.event.action }}" == "closed" ]]; then
-              git commit -m "Remove PR preview #${{ github.event.pull_request.number }}"
-            else
-              git commit -m "Update PR preview #${{ github.event.pull_request.number }} (${GITHUB_SHA::7})"
-            fi
-            git push origin "$PUBLISH_BRANCH"
-          else
-            echo "No preview changes to publish."
-          fi
+      - name: Deploy preview to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          preview: true
 
       - name: Publish preview URL to workflow summary
-        if: ${{ github.event.action != 'closed' }}
         run: |
           echo "### PR Preview URL" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "${PREVIEW_URL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice title=PR Preview URL::${PREVIEW_URL}"
+          echo "::notice title=PR Preview URL::${{ steps.deployment.outputs.page_url }}"
 
       - name: Comment preview URL on PR
-        if: ${{ github.event.action != 'closed' }}
         continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
             try {
               const marker = '<!-- pages-preview-url -->';
+              const previewUrl = '${{ steps.deployment.outputs.page_url }}';
               const body = `${marker}
               Preview deployed for this PR:
 
-              ${process.env.PREVIEW_URL}
+              ${previewUrl}
 
               _This comment is updated automatically on new commits._`;
 
