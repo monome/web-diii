@@ -1387,7 +1387,7 @@ class DruidApp {
         try {
             const lines = await this.executeLuaCapture([
                 'print("__webdiii_ls_begin")',
-                'ls()',
+                'print(fs_list_files())',
                 'print("__webdiii_ls_end")',
                 'print("__webdiii_free\t" .. tostring(fs_free_space() or 0))'
             ]);
@@ -1507,13 +1507,24 @@ class DruidApp {
     }
 
     async readRemoteFile(fileName) {
-        const lines = await this.executeLuaCapture(`cat(${this.luaQuote(fileName)})`);
+        const lines = await this.executeLuaCapture(`print(fs_read_file(${this.luaQuote(fileName)}))`);
         return lines.join('\n');
     }
 
     async configureFirst(fileName) {
         try {
-            await this.executeLuaCapture(`first(${this.luaQuote(fileName)})`);
+            const normalizedName = String(fileName || '').trim();
+            if (!normalizedName) {
+                await this.executeLuaCapture('fs_remove_file("init.lua")');
+                this.outputLine('startup file cleared');
+                await this.refreshFileList();
+                return;
+            }
+
+            const initContent = `fs_run_file(${this.luaQuote(normalizedName)})`;
+            await this.executeLuaCapture(
+                `fs_write_file("init.lua", ${this.luaQuote(initContent)})`
+            );
             this.outputLine(`${fileName} will now run at at startup`);
             await this.refreshFileList();
         } catch (error) {
@@ -1555,7 +1566,7 @@ class DruidApp {
             afterHeaderSpacerLine.textContent = '\n';
             this.elements.output.appendChild(afterHeaderSpacerLine);
 
-            const lines = await this.executeLuaCapture(`cat(${this.luaQuote(fileName)})`);
+            const lines = await this.executeLuaCapture(`print(fs_read_file(${this.luaQuote(fileName)}))`);
             for (const line of lines) {
                 this.outputLine(line, { autoScroll: false });
             }
@@ -1601,7 +1612,7 @@ class DruidApp {
         }
 
         try {
-            await this.executeLuaCapture(`rm(${this.luaQuote(fileName)})`);
+            await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(fileName)})`);
             this.outputLine(`Deleted ${fileName}`);
             await this.refreshFileList();
         } catch (error) {
