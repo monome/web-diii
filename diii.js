@@ -1577,6 +1577,7 @@ class DruidApp {
     async enqueueRunFile(fileName, options = {}) {
         const task = async () => {
             await this.runFile(fileName, options);
+            await this.refreshFileList();
         };
 
         this.fileRunQueue = this.fileRunQueue
