@@ -1086,7 +1086,7 @@ class DruidApp {
         const baseName = fileName;
         const lines = this.getUploadLines(text);
 
-        await this.executeLuaCapture(`rm(${this.luaQuote(baseName)})`);
+        await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(baseName)})`);
 
         // Match diii upload protocol:
         // ^^s, <filename>, ^^f, ^^s, <file lines>, ^^w
@@ -1390,7 +1390,7 @@ class DruidApp {
                 'for _, __name in ipairs(fs_list_files()) do local __size = fs_file_size(__name) or 0; print("__webdiii_file\\t" .. __name .. "\\t" .. tostring(__size)) end',
                 'print("__webdiii_ls_end")',
                 'print("__webdiii_mem_begin")',
-                'mem()',
+                'print(collectgarbage("count"))',
                 'print("__webdiii_mem_end")'
             ]);
 
