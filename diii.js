@@ -1617,7 +1617,7 @@ class DruidApp {
         }
 
         try {
-            await this.executeLuaCapture(`rm(${this.luaQuote(fileName)})`);
+            await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(fileName)})`);
             this.outputLine(`Deleted ${fileName}`);
             await this.refreshFileList();
         } catch (error) {
