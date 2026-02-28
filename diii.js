@@ -556,17 +556,15 @@ class DruidApp {
             return;
         }
 
-        const atStart = input.selectionStart === 0 && input.selectionEnd === 0;
-        const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
         const noModifiers = !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
 
-        if (noModifiers && event.key === 'ArrowUp' && atStart) {
+        if (noModifiers && event.key === 'ArrowUp') {
             event.preventDefault();
             this.navigateReplHistory('up');
             return;
         }
 
-        if (noModifiers && event.key === 'ArrowDown' && atEnd) {
+        if (noModifiers && event.key === 'ArrowDown') {
             event.preventDefault();
             this.navigateReplHistory('down');
             return;
