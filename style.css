@@ -553,33 +553,6 @@ body.is-resizing-explorer * {
     cursor: pointer;
 }
 
-.app-toast {
-    position: fixed;
-    right: 12px;
-    bottom: 12px;
-    z-index: 1200;
-    max-width: min(380px, calc(100vw - 24px));
-    padding: 8px 10px;
-    border: 1px solid var(--neutral-trim);
-    border-radius: 8px;
-    background-color: var(--bg-surface);
-    color: var(--neutral-heavy);
-    font-size: 0.84rem;
-    opacity: 0;
-    transform: translateY(6px);
-    pointer-events: none;
-    transition: opacity 0.2s, transform 0.2s;
-}
-
-.app-toast.visible {
-    opacity: 1;
-    transform: translateY(0);
-}
-
-.app-toast.warn {
-    border-color: var(--accent-hover);
-}
-
 @media (max-width: 900px) {
     .header-left,
     .header-right {

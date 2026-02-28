@@ -518,28 +518,6 @@ class DruidApp {
         }
     }
 
-    showToast(message, type = 'info') {
-        if (!this.toastElement) {
-            this.toastElement = document.createElement('div');
-            this.toastElement.className = 'app-toast';
-            document.body.appendChild(this.toastElement);
-        }
-
-        this.toastElement.className = `app-toast visible ${type}`;
-        this.toastElement.textContent = message;
-
-        if (this.toastTimer) {
-            clearTimeout(this.toastTimer);
-        }
-
-        this.toastTimer = setTimeout(() => {
-            if (this.toastElement) {
-                this.toastElement.className = 'app-toast';
-            }
-            this.toastTimer = null;
-        }, 2600);
-    }
-
     clearOutput() {
         if (this.elements.output) this.elements.output.textContent = '';
     }
