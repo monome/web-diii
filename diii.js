@@ -1567,9 +1567,11 @@ class DruidApp {
     }
 
     async runFile(fileName) {
-        await this.iiiDevice.writeLine('^^i');
+        await this.iiiDevice.writeLine('^^c');
         await this.delay(500);
-        await this.executeLua(`require(${this.luaQuote(fileName)})`);
+        await this.executeLua(`fs_run_file("lib.lua")`);
+        await this.delay(500);
+        await this.executeLua(`fs_run_file(${this.luaQuote(fileName)})`);
     }
 
     async deleteFile(fileName) {
