@@ -1390,7 +1390,7 @@ class DruidApp {
                 'for _, __name in ipairs(fs_list_files()) do local __size = fs_file_size(__name) or 0; print("__webdiii_file\\t" .. __name .. "\\t" .. tostring(__size)) end',
                 'print("__webdiii_ls_end")',
                 'print("__webdiii_mem_begin")',
-                'print(collectgarbage("count"))',
+                'print(fs_free_space())',
                 'print("__webdiii_mem_end")'
             ]);
 
@@ -1497,8 +1497,13 @@ class DruidApp {
         }
 
         const bestLine = cleanedLines.find((line) => /\d/.test(line)) || cleanedLines[0];
-        const lowered = bestLine.toLowerCase();
-        return /^mem[:\s]/.test(lowered) ? lowered : `mem: ${lowered}`;
+        const numericMatch = bestLine.match(/-?\d+/);
+        if (!numericMatch) {
+            return null;
+        }
+
+        const bytes = Number.parseInt(numericMatch[0], 10);
+        return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
     }
 
     async refreshFirstBadgeFileNames(entries) {
