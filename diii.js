@@ -596,6 +596,7 @@ class DruidApp {
         this.outputLine(`>> ${code}`);
         const isHelpShortcut = /^h$/i.test(code.trim());
         const isUploadShortcut = /^u$/i.test(code.trim());
+        const isReUploadShortcut = /^r$/i.test(code.trim());
 
         if (this.commandHistory.length === 0 || this.commandHistory[this.commandHistory.length - 1] !== code) {
             this.commandHistory.push(code);
@@ -611,6 +612,14 @@ class DruidApp {
 
         if (isUploadShortcut) {
             this.openUploadPicker();
+            this.elements.replInput.value = '';
+            this.historyIndex = -1;
+            this.currentInput = '';
+            return;
+        }
+
+        if (isReUploadShortcut) {
+            // TODO: init, upload last, run
             this.elements.replInput.value = '';
             this.historyIndex = -1;
             this.currentInput = '';
@@ -1558,6 +1567,8 @@ class DruidApp {
     }
 
     async runFile(fileName) {
+        await this.iiiDevice.writeLine('^^i');
+        await this.delay(500);
         await this.executeLua(`require(${this.luaQuote(fileName)})`);
     }
 
