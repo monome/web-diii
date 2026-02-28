@@ -1216,7 +1216,6 @@ class DruidApp {
         try {
             this.outputLine(`r: refreshing ${script.name}`);
             this.queueSuppressedOutputLine('-- re-init with no script', 8000);
-            this.queueSuppressedOutputLine('-- init: writing lib.lua', 8000);
             this.queueSuppressedOutputLine('-- init: skip script', 8000);
             this.queueSuppressedOutputLine('-- lua lib', 8000);
             await this.iiiDevice.writeLine('^^c');
@@ -1712,6 +1711,9 @@ class DruidApp {
     }
 
     async runFile(fileName) {
+        this.queueSuppressedOutputLine('-- re-init with no script', 8000);
+        this.queueSuppressedOutputLine('-- init: skip script', 8000);
+        this.queueSuppressedOutputLine('-- lua lib', 8000);
         await this.iiiDevice.writeLine('^^c');
         await this.delay(500);
         await this.executeLua(`fs_run_file("lib.lua")`);
