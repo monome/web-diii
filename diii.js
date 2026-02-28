@@ -596,13 +596,6 @@ class DruidApp {
         this.outputLine(`>> ${code}`);
         const isHelpShortcut = /^h$/i.test(code.trim());
         const isUploadShortcut = /^u$/i.test(code.trim());
-        const containsSystemCommand = /\b(?:ls|cat|rm|mem|first|require)\s*\(/.test(code);
-        const containsRequireCommand = /\brequire\s*\(/.test(code);
-        const containsRmCommand = /\brm\s*\(/.test(code);
-        const containsFirstCommand = /\bfirst\s*\(/.test(code);
-        const containsLsCommand = /\bls\s*\(/.test(code);
-        const containsCleanCommand = /(?:^|\s)\^\^c(?:\s|$)/i.test(code);
-        const shouldAutoOpenExplorer = containsRequireCommand || containsRmCommand || containsFirstCommand || containsLsCommand;
 
         if (this.commandHistory.length === 0 || this.commandHistory[this.commandHistory.length - 1] !== code) {
             this.commandHistory.push(code);
@@ -632,16 +625,6 @@ class DruidApp {
             return;
         }
 
-        if (containsRmCommand) {
-            const singleTargetMatch = code.match(/\brm\s*\(\s*['"]([^'"]+)['"]\s*\)/);
-            const promptLabel = singleTargetMatch
-                ? `Delete ${singleTargetMatch[1]}?`
-                : 'Run rm command?';
-            if (!window.confirm(promptLabel)) {
-                return;
-            }
-        }
-
         try {
             const fileSelectMatch = code.match(/^\^\^s\s+(.+)$/);
             if (fileSelectMatch) {
@@ -655,19 +638,6 @@ class DruidApp {
             for (const line of code.split('\n')) {
                 await this.iiiDevice.writeLine(line);
                 await this.delay(1);
-            }
-
-            if (shouldAutoOpenExplorer) {
-                this.setExplorerCollapsed(false);
-            }
-
-            if (containsSystemCommand) {
-                await this.delay(150);
-                await this.refreshFileList();
-            }
-
-            if (containsCleanCommand) {
-                this.renderFileList();
             }
 
             this.elements.replInput.value = '';
@@ -1294,6 +1264,16 @@ class DruidApp {
         return true;
     }
 
+    async executeLua(command) {
+        if (!this.iiiDevice.isConnected) {
+            throw new Error('Not connected to usb device');
+        }
+
+        await this.iiiDevice.writeLine(command);
+
+        return true;
+    }
+
     async executeLuaCapture(commands) {
         if (!this.iiiDevice.isConnected) {
             throw new Error('Not connected to usb device');
@@ -1578,15 +1558,7 @@ class DruidApp {
     }
 
     async runFile(fileName) {
-        try {
-            const lines = await this.executeLuaCapture(`require(${this.luaQuote(fileName)})`);
-            for (const line of lines) {
-                this.outputLine(line);
-            }
-            this.outputLine(`Running ${fileName}`);
-        } catch (error) {
-            this.outputLine(`Run error: ${error.message}`);
-        }
+        await this.executeLua(`require(${this.luaQuote(fileName)})`);
     }
 
     async deleteFile(fileName) {
