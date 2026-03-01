@@ -1625,6 +1625,7 @@ class diiiApp {
         this.queueSuppressedOutputLine('-- re-init with no script', 8000);
         this.queueSuppressedOutputLine('-- init: skip script', 8000);
         this.queueSuppressedOutputLine('-- lua lib', 8000);
+        this.outputLine(`running ${fileName}...`);
         await this.iiiDevice.writeLine('^^c');
         await this.delay(500);
         await this.executeLua(`fs_run_file("lib.lua")`);
