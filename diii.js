@@ -1,5 +1,5 @@
 /**
- * web-diii REPL-only app
+ * diii web app
  * Minimal serial REPL + script browser iii devices.
  */
 
@@ -192,7 +192,7 @@ class iiiConnection {
     }
 }
 
-class DruidApp {
+class diiiApp {
     constructor() {
         this.iiiDevice = new iiiConnection();
         this.selectedPort = null;
@@ -1625,6 +1625,7 @@ class DruidApp {
         this.queueSuppressedOutputLine('-- re-init with no script', 8000);
         this.queueSuppressedOutputLine('-- init: skip script', 8000);
         this.queueSuppressedOutputLine('-- lua lib', 8000);
+        this.outputLine(`running ${fileName}...`);
         await this.iiiDevice.writeLine('^^c');
         await this.delay(500);
         await this.executeLua(`fs_run_file("lib.lua")`);
@@ -1713,10 +1714,10 @@ class DruidApp {
 
     showHelp() {
         this.outputLine('');
-        this.outputLine(' web-diii helpers:');
+        this.outputLine(' diii helpers:');
         this.outputLine(' h            show this help');
         this.outputLine(' u            open file picker (same as upload button)');
-        this.outputLine(' r            init, refresh last upload, run');
+        this.outputLine(' r            re-upload and run last uploaded script');
         this.outputLine(' Cmd/Ctrl+Shift+C  connect/disconnect');
         this.outputLine('');
         this.outputLine(' common iii commands:');
@@ -1733,7 +1734,7 @@ class DruidApp {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    new DruidApp();
+    new diiiApp();
 
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch((error) => {
