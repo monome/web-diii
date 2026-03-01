@@ -1717,7 +1717,7 @@ class diiiApp {
         this.outputLine(' diii helpers:');
         this.outputLine(' h            show this help');
         this.outputLine(' u            open file picker (same as upload button)');
-        this.outputLine(' r            init, refresh last upload, run');
+        this.outputLine(' r            re-upload and run last uploaded script');
         this.outputLine(' Cmd/Ctrl+Shift+C  connect/disconnect');
         this.outputLine('');
         this.outputLine(' common iii commands:');
