@@ -754,6 +754,7 @@ class DruidApp {
         }
 
         await this.iiiDevice.disconnect();
+        this.refreshFileList();
         this.outputLine('');
         this.outputLine('disconnected');
         this.outputLine('');
