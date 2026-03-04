@@ -261,6 +261,10 @@ body.is-resizing-explorer * {
     text-transform: lowercase;
 }
 
+body.serialosc-mode .file-space-footer {
+    display: none;
+}
+
 .file-list-empty {
     padding: 8px;
     color: var(--neutral-medium);
@@ -502,6 +506,21 @@ body.is-resizing-explorer * {
 .repl-action-btn:hover {
     color: var(--interactive-selected);
     border-color: var(--interactive-medium);
+}
+
+.repl-connection-btn:disabled,
+.repl-action-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    color: var(--neutral-medium);
+    border-color: var(--neutral-trim);
+}
+
+.repl-input:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    color: var(--neutral-medium);
+    border-color: var(--neutral-trim);
 }
 
 .ws-bridge-settings-btn {

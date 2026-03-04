@@ -5,19 +5,25 @@
 
 class iiiConnection {
     constructor() {
+        this.serialRequestFilters = [
+            { usbVendorId: 0xCAFE, usbProductId: 0x1101 },
+            { usbVendorId: 0xCAFE, usbProductId: 0x1110 }
+        ];
         this.port = null;
         this.preferredPort = null;
         this.reader = null;
         this.writer = null;
-        this.readableStreamClosed = null;
-        this.writableStreamClosed = null;
         this.isConnected = false;
+        this.isSerialOscMode = false;
         this.lineBuffer = '';
+        this.binaryBuffer = [];
+        this.seriesTiltState = { x: 0, y: 0 };
         this.partialLineFlushTimer = null;
         this.partialLineFlushDelayMs = 40;
         this.onDataReceived = null;
         this.onConnectionChange = null;
         this._textEncoder = new TextEncoder();
+        this._textDecoder = new TextDecoder();
     }
 
     async connect(port = null) {
@@ -26,7 +32,7 @@ class iiiConnection {
 
             if (!this.port) {
                 this.port = await navigator.serial.requestPort({
-                    filters: [{ usbVendorId: 0xCAFE, usbProductId: 0x1101 }]
+                    filters: this.serialRequestFilters
                 });
             }
 
@@ -41,14 +47,11 @@ class iiiConnection {
             });
 
             this.isConnected = true;
+            this.isSerialOscMode = this.detectSerialOscMode(this.port);
+            this.binaryBuffer = [];
 
-            const textDecoder = new TextDecoderStream();
-            this.readableStreamClosed = this.port.readable.pipeTo(textDecoder.writable);
-            this.reader = textDecoder.readable.getReader();
-
-            const textEncoder = new TextEncoderStream();
-            this.writableStreamClosed = textEncoder.readable.pipeTo(this.port.writable);
-            this.writer = textEncoder.writable.getWriter();
+            this.reader = this.port.readable.getReader();
+            this.writer = this.port.writable.getWriter();
 
             this.startReading();
 
@@ -75,21 +78,10 @@ class iiiConnection {
                 if (done) break;
                 if (!value) continue;
 
-                this.lineBuffer += value;
-
-                let newlineIndex = -1;
-                while ((newlineIndex = this.lineBuffer.indexOf('\n')) !== -1) {
-                    const line = this.lineBuffer.substring(0, newlineIndex);
-                    this.lineBuffer = this.lineBuffer.substring(newlineIndex + 1);
-                    if (line && this.onDataReceived) {
-                        this.onDataReceived(line);
-                    }
-                }
-
-                if (this.lineBuffer) {
-                    this.schedulePartialLineFlush();
+                if (this.isSerialOscMode) {
+                    this.processSerialOscBytes(value);
                 } else {
-                    this.clearPartialLineFlush();
+                    this.processTextBytes(value);
                 }
             }
 
@@ -103,7 +95,7 @@ class iiiConnection {
                 await this.reader.cancel().catch(() => {});
             }
             if (this.writer) {
-                await this.writer.close().catch(() => {});
+                this.writer.releaseLock?.();
             }
 
             this.reader = null;
@@ -132,11 +124,24 @@ class iiiConnection {
             payload += '\n';
         }
 
-        await this.writer.write(payload);
+        await this.writer.write(this._textEncoder.encode(payload));
     }
 
     async writeLine(line) {
         await this.write(`${line}\n`);
+    }
+
+    async writeBytes(bytes) {
+        if (!this.isConnected || !this.writer) {
+            throw new Error('Not connected');
+        }
+
+        let payload = bytes;
+        if (!(payload instanceof Uint8Array)) {
+            payload = new Uint8Array(payload);
+        }
+
+        await this.writer.write(payload);
     }
 
     async disconnect() {
@@ -145,11 +150,9 @@ class iiiConnection {
 
         if (this.reader) {
             await this.reader.cancel().catch(() => {});
-            await this.readableStreamClosed?.catch(() => {});
         }
         if (this.writer) {
-            await this.writer.close().catch(() => {});
-            await this.writableStreamClosed?.catch(() => {});
+            this.writer.releaseLock?.();
         }
         if (this.port) {
             await this.port.close().catch(() => {});
@@ -158,6 +161,7 @@ class iiiConnection {
         this.port = null;
         this.reader = null;
         this.writer = null;
+        this.binaryBuffer = [];
         this.flushPartialLineBuffer();
 
         if (this.onConnectionChange) {
@@ -190,12 +194,163 @@ class iiiConnection {
             this.onDataReceived(partial);
         }
     }
+
+    detectSerialOscMode(port) {
+        try {
+            const info = port?.getInfo?.();
+            return Number(info?.usbVendorId) === 0xCAFE && Number(info?.usbProductId) === 0x1110;
+        } catch {
+            return false;
+        }
+    }
+
+    processTextBytes(bytes) {
+        const decoded = this._textDecoder.decode(bytes, { stream: true });
+        if (!decoded) return;
+
+        this.lineBuffer += decoded;
+
+        let newlineIndex = -1;
+        while ((newlineIndex = this.lineBuffer.indexOf('\n')) !== -1) {
+            const line = this.lineBuffer.substring(0, newlineIndex);
+            this.lineBuffer = this.lineBuffer.substring(newlineIndex + 1);
+            if (line && this.onDataReceived) {
+                this.onDataReceived(line);
+            }
+        }
+
+        if (this.lineBuffer) {
+            this.schedulePartialLineFlush();
+        } else {
+            this.clearPartialLineFlush();
+        }
+    }
+
+    processSerialOscBytes(bytes) {
+        this.binaryBuffer.push(...bytes);
+
+        let guard = 0;
+        while (this.binaryBuffer.length > 0 && guard < 8192) {
+            guard += 1;
+
+            if (this.binaryBuffer.length >= 2) {
+                const maybeSeriesEvent = this.tryParseSeriesEvent(this.binaryBuffer[0], this.binaryBuffer[1]);
+                if (maybeSeriesEvent) {
+                    this.binaryBuffer.splice(0, 2);
+                    this.emitSerialEventLine(maybeSeriesEvent.event, maybeSeriesEvent.args);
+                    continue;
+                }
+            }
+
+            const mextSize = this.getMextIncomingSize(this.binaryBuffer[0]);
+            if (mextSize != null) {
+                if (this.binaryBuffer.length < mextSize) {
+                    return;
+                }
+
+                const header = this.binaryBuffer[0];
+                const addr = (header >> 4) & 0x0F;
+                const cmd = header & 0x0F;
+                const payload = this.binaryBuffer.slice(1, mextSize);
+                this.binaryBuffer.splice(0, mextSize);
+
+                const maybeMextEvent = this.parseMextIncomingEvent(addr, cmd, payload);
+                if (maybeMextEvent) {
+                    this.emitSerialEventLine(maybeMextEvent.event, maybeMextEvent.args);
+                }
+                continue;
+            }
+
+            this.binaryBuffer.shift();
+        }
+    }
+
+    tryParseSeriesEvent(header, dataByte) {
+        if (header === 0x00 || header === 0x10) {
+            const x = (dataByte >> 4) & 0x0F;
+            const y = dataByte & 0x0F;
+            const z = header === 0x00 ? 1 : 0;
+            return { event: 'key', args: [x, y, z] };
+        }
+
+        if (header === 0xD0) {
+            this.seriesTiltState.x = dataByte;
+            return { event: 'tilt', args: [0, this.seriesTiltState.x, this.seriesTiltState.y, 0] };
+        }
+
+        if (header === 0xD1) {
+            this.seriesTiltState.y = dataByte;
+            return { event: 'tilt', args: [0, this.seriesTiltState.x, this.seriesTiltState.y, 0] };
+        }
+
+        return null;
+    }
+
+    getMextIncomingSize(header) {
+        const addr = (header >> 4) & 0x0F;
+        const cmd = header & 0x0F;
+
+        const lengths = {
+            0: { 0: 2, 1: 32, 2: 3, 3: 2, 4: 2, 15: 8 },
+            2: { 0: 2, 1: 2 },
+            5: { 0: 2, 1: 1, 2: 1 },
+            8: { 0: 1, 1: 7 }
+        };
+
+        const payloadLength = lengths[addr]?.[cmd];
+        if (!Number.isFinite(payloadLength)) {
+            return null;
+        }
+
+        return 1 + payloadLength;
+    }
+
+    parseMextIncomingEvent(addr, cmd, payload) {
+        if (addr === 2 && (cmd === 0 || cmd === 1) && payload.length >= 2) {
+            const z = cmd === 1 ? 1 : 0;
+            return { event: 'key', args: [payload[0], payload[1], z] };
+        }
+
+        if (addr === 5 && cmd === 0 && payload.length >= 2) {
+            const number = payload[0];
+            const delta = payload[1] > 127 ? payload[1] - 256 : payload[1];
+            return { event: 'enc', args: [number, delta] };
+        }
+
+        if (addr === 5 && (cmd === 1 || cmd === 2) && payload.length >= 1) {
+            const number = payload[0];
+            const z = cmd === 1 ? 1 : 0;
+            return { event: 'enc_key', args: [number, z] };
+        }
+
+        if (addr === 8 && cmd === 1 && payload.length >= 7) {
+            const number = payload[0];
+            const x = this.readInt16LE(payload[1], payload[2]);
+            const y = this.readInt16LE(payload[3], payload[4]);
+            const z = this.readInt16LE(payload[5], payload[6]);
+            return { event: 'tilt', args: [number, x, y, z] };
+        }
+
+        return null;
+    }
+
+    readInt16LE(low, high) {
+        const unsigned = ((high & 0xFF) << 8) | (low & 0xFF);
+        return unsigned > 0x7FFF ? unsigned - 0x10000 : unsigned;
+    }
+
+    emitSerialEventLine(eventName, args) {
+        if (!this.onDataReceived) return;
+        this.onDataReceived(`^^${eventName}(${args.join(', ')})`);
+    }
 }
 
 class WsToSerialBridge {
     constructor(options = {}) {
         this.wsUrl = String(options.wsUrl || '').trim();
+        this.handlePayload = options.handlePayload;
         this.decodePayload = options.decodePayload;
+        this.encodeSerialEvent = options.encodeSerialEvent;
         this.writeLine = options.writeLine;
         this.isSerialConnected = options.isSerialConnected;
         this.onStatus = options.onStatus;
@@ -206,6 +361,9 @@ class WsToSerialBridge {
         this.isRunning = false;
         this.reconnectTimer = null;
         this.messageChain = Promise.resolve();
+        this.pendingEncoderDeltas = new Map();
+        this.encoderFlushTimer = null;
+        this.encoderFlushDelayMs = 8;
     }
 
     hasConfiguration() {
@@ -222,6 +380,8 @@ class WsToSerialBridge {
     stop() {
         this.isRunning = false;
         this.clearReconnectTimer();
+        this.clearEncoderFlushTimer();
+        this.pendingEncoderDeltas.clear();
 
         const socket = this.socket;
         this.socket = null;
@@ -290,8 +450,73 @@ class WsToSerialBridge {
         this.reconnectTimer = null;
     }
 
+    clearEncoderFlushTimer() {
+        if (!this.encoderFlushTimer) return;
+        clearTimeout(this.encoderFlushTimer);
+        this.encoderFlushTimer = null;
+    }
+
+    scheduleEncoderFlush() {
+        if (this.encoderFlushTimer) return;
+
+        this.encoderFlushTimer = setTimeout(() => {
+            this.encoderFlushTimer = null;
+            this.flushEncoderDeltas();
+        }, this.encoderFlushDelayMs);
+    }
+
+    flushEncoderDeltas() {
+        if (!this.isRunning || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            this.pendingEncoderDeltas.clear();
+            return;
+        }
+
+        if (typeof this.encodeSerialEvent !== 'function') {
+            this.pendingEncoderDeltas.clear();
+            return;
+        }
+
+        for (const [ring, delta] of this.pendingEncoderDeltas.entries()) {
+            if (!Number.isFinite(delta) || delta === 0) continue;
+
+            const packet = this.encodeSerialEvent('enc', [ring, delta]);
+            if (!(packet instanceof Uint8Array) || packet.length === 0) {
+                continue;
+            }
+
+            try {
+                this.socket.send(packet);
+            } catch (error) {
+                this.emitStatus(`ws bridge send error: ${error.message}`);
+            }
+        }
+
+        this.pendingEncoderDeltas.clear();
+    }
+
+    queueEncoderDelta(args = []) {
+        const [ringRaw, deltaRaw] = Array.isArray(args) ? args : [];
+        const ring = Number.parseInt(String(ringRaw), 10);
+        const delta = Number.parseInt(String(deltaRaw), 10);
+
+        if (!Number.isFinite(ring) || !Number.isFinite(delta)) {
+            return false;
+        }
+
+        const current = this.pendingEncoderDeltas.get(ring) || 0;
+        this.pendingEncoderDeltas.set(ring, current + delta);
+        this.scheduleEncoderFlush();
+        return true;
+    }
+
     async handleMessage(event) {
         if (!this.isRunning) return;
+        if (typeof this.handlePayload === 'function') {
+            const wasHandled = await this.handlePayload(event.data);
+            if (wasHandled) {
+                return;
+            }
+        }
         if (typeof this.decodePayload !== 'function') {
             throw new Error('decodePayload is not configured');
         }
@@ -313,6 +538,33 @@ class WsToSerialBridge {
                 break;
             }
             await this.writeLine(String(line));
+        }
+    }
+
+    sendSerialEvent(eventName, args = []) {
+        if (!this.isRunning || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+
+        if (String(eventName) === 'enc') {
+            return this.queueEncoderDelta(args);
+        }
+
+        if (typeof this.encodeSerialEvent !== 'function') {
+            return false;
+        }
+
+        const packet = this.encodeSerialEvent(eventName, args);
+        if (!(packet instanceof Uint8Array) || packet.length === 0) {
+            return false;
+        }
+
+        try {
+            this.socket.send(packet);
+            return true;
+        } catch (error) {
+            this.emitStatus(`ws bridge send error: ${error.message}`);
+            return false;
         }
     }
 
@@ -487,7 +739,9 @@ class diiiApp {
 
         this.wsToSerialBridge = new WsToSerialBridge({
             wsUrl: normalized,
+            handlePayload: (payload) => this.handleBridgeSerialOscPayload(payload),
             decodePayload: (payload) => this.decodeBridgePayloadViaWasm(payload),
+            encodeSerialEvent: (eventName, args) => this.encodeSerialOscEventPacket(eventName, args),
             writeLine: (line) => this.iiiDevice.writeLine(line),
             isSerialConnected: () => this.iiiDevice.isConnected,
             onStatus: (message) => this.outputLine(message),
@@ -605,24 +859,628 @@ class diiiApp {
     }
 
     async decodeBridgePayloadFallback(payload) {
-        let text = '';
-
         if (typeof payload === 'string') {
-            text = payload;
-        } else if (payload instanceof Blob) {
-            text = await payload.text();
-        } else if (payload instanceof ArrayBuffer) {
-            text = new TextDecoder().decode(payload);
-        } else if (ArrayBuffer.isView(payload)) {
-            text = new TextDecoder().decode(payload.buffer);
-        } else {
-            text = String(payload ?? '');
+            return this.splitBridgeLines(payload);
         }
 
-        return text
+        const bytes = await this.getBridgePayloadBytes(payload);
+        if (bytes) {
+            const oscLines = this.decodeOscPacketToLines(bytes);
+            if (oscLines.length > 0) {
+                return oscLines;
+            }
+
+            return this.splitBridgeLines(new TextDecoder().decode(bytes));
+        }
+
+        return this.splitBridgeLines(String(payload ?? ''));
+    }
+
+    async getBridgePayloadBytes(payload) {
+        if (payload instanceof Blob) {
+            return new Uint8Array(await payload.arrayBuffer());
+        }
+
+        if (payload instanceof ArrayBuffer) {
+            return new Uint8Array(payload);
+        }
+
+        if (ArrayBuffer.isView(payload)) {
+            return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+        }
+
+        return null;
+    }
+
+    async handleBridgeSerialOscPayload(payload) {
+        if (!this.iiiDevice.isConnected || !this.iiiDevice.isSerialOscMode) {
+            return false;
+        }
+
+        const bytes = await this.getBridgePayloadBytes(payload);
+        if (!bytes || bytes.length === 0) {
+            return false;
+        }
+
+        let packet;
+        try {
+            packet = this.readOscPacket(bytes, 0, bytes.length).packet;
+        } catch {
+            return false;
+        }
+
+        const ledPackets = this.oscPacketToSerialOscLedPackets(packet);
+        if (ledPackets.length === 0) {
+            return false;
+        }
+
+        for (const ledPacket of ledPackets) {
+            await this.iiiDevice.writeBytes(ledPacket);
+        }
+
+        return true;
+    }
+
+    oscPacketToSerialOscLedPackets(packet) {
+        if (!packet) return [];
+
+        if (packet.type === 'bundle') {
+            const packets = [];
+            for (const child of packet.elements || []) {
+                packets.push(...this.oscPacketToSerialOscLedPackets(child));
+            }
+            return packets;
+        }
+
+        if (packet.type !== 'message') {
+            return [];
+        }
+
+        return this.oscMessageToSerialOscLedPackets(packet.address, packet.args);
+    }
+
+    oscMessageToSerialOscLedPackets(address, args) {
+        const normalizedAddress = String(address || '');
+        const values = (Array.isArray(args) ? args : []).map((value) => Number.parseInt(String(value), 10));
+
+        const matchesPath = (suffix) => {
+            if (normalizedAddress === suffix) {
+                return true;
+            }
+            return normalizedAddress.endsWith(suffix) && normalizedAddress.charAt(normalizedAddress.length - suffix.length - 1) === '/';
+        };
+
+        if (matchesPath('/ring/set') && values.length >= 3 && values.slice(0, 3).every(Number.isFinite)) {
+            const ring = values[0] & 0xFF;
+            const led = values[1] & 0xFF;
+            const level = values[2] & 0x0F;
+            return [this.encodeMextPacket(9, 0, [ring, led, level])];
+        }
+
+        if (matchesPath('/ring/all') && values.length >= 2 && values.slice(0, 2).every(Number.isFinite)) {
+            const ring = values[0] & 0xFF;
+            const level = values[1] & 0x0F;
+            return [this.encodeMextPacket(9, 1, [ring, level])];
+        }
+
+        if (matchesPath('/ring/range') && values.length >= 4 && values.slice(0, 4).every(Number.isFinite)) {
+            const ring = values[0] & 0xFF;
+            const start = values[1] & 0xFF;
+            const end = values[2] & 0xFF;
+            const level = values[3] & 0x0F;
+            return [this.encodeMextPacket(9, 3, [ring, start, end, level])];
+        }
+
+        if (matchesPath('/ring/intensity') && values.length >= 1 && Number.isFinite(values[0])) {
+            const brightness = values[0] & 0x0F;
+            return [this.encodeMextPacket(9, 4, [0, brightness])];
+        }
+
+        if (matchesPath('/ring/map') && values.length >= 65 && values.slice(0, 65).every(Number.isFinite)) {
+            const ring = values[0] & 0xFF;
+            const packedLevels = this.packRingMapLevels(values.slice(1, 65));
+            return [this.encodeMextPacket(9, 2, [ring, ...packedLevels])];
+        }
+
+        if (matchesPath('/grid/led/set') && values.length >= 3 && values.slice(0, 3).every(Number.isFinite)) {
+            const x = values[0] & 0xFF;
+            const y = values[1] & 0xFF;
+            const on = values[2] ? 1 : 0;
+            return [this.encodeMextPacket(1, on ? 1 : 0, [x, y])];
+        }
+
+        if (matchesPath('/grid/led/all') && values.length >= 1 && Number.isFinite(values[0])) {
+            const on = values[0] ? 1 : 0;
+            return [this.encodeMextPacket(1, on ? 3 : 2, [])];
+        }
+
+        if (matchesPath('/grid/led/intensity') && values.length >= 1 && Number.isFinite(values[0])) {
+            const brightness = values[0] & 0x0F;
+            return [this.encodeMextPacket(1, 7, [brightness])];
+        }
+
+        if (matchesPath('/grid/led/map') && values.length >= 10 && values.slice(0, 10).every(Number.isFinite)) {
+            const xOff = values[0] & 0xFF;
+            const yOff = values[1] & 0xFF;
+            const frame = values.slice(2, 10).map((value) => value & 0xFF);
+            return [this.encodeMextPacket(1, 4, [xOff, yOff, ...frame])];
+        }
+
+        if (matchesPath('/grid/led/row') && values.length >= 3 && values.every(Number.isFinite)) {
+            const xOff = values[0] & 0xFF;
+            const y = values[1] & 0xFF;
+            const packets = [];
+            for (let index = 2; index < values.length; index += 1) {
+                const data = values[index] & 0xFF;
+                packets.push(this.encodeMextPacket(1, 5, [xOff + ((index - 2) * 8), y, data]));
+            }
+            return packets;
+        }
+
+        if (matchesPath('/grid/led/col') && values.length >= 3 && values.every(Number.isFinite)) {
+            const x = values[0] & 0xFF;
+            const yOff = values[1] & 0xFF;
+            const packets = [];
+            for (let index = 2; index < values.length; index += 1) {
+                const data = values[index] & 0xFF;
+                packets.push(this.encodeMextPacket(1, 6, [x, yOff + ((index - 2) * 8), data]));
+            }
+            return packets;
+        }
+
+        return [];
+    }
+
+    parseReplOscCommand(line) {
+        const normalized = String(line || '').trim();
+        if (!normalized) {
+            return { address: '', args: [] };
+        }
+
+        const parts = normalized.split(/\s+/).filter((part) => part.length > 0);
+        const address = parts[0] || '';
+        const args = parts.slice(1).map((token) => {
+            const value = Number.parseInt(token, 10);
+            if (!Number.isFinite(value)) {
+                throw new Error(`invalid OSC integer argument: ${token}`);
+            }
+            return value;
+        });
+
+        return { address, args };
+    }
+
+    async sendSerialOscReplCommand(code) {
+        const lines = String(code)
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+
+        if (lines.length === 0) {
+            return true;
+        }
+
+        for (const line of lines) {
+            if (!line.startsWith('/')) {
+                throw new Error('serialosc REPL expects OSC paths, e.g. /ring/set 0 1 15');
+            }
+
+            const parsed = this.parseReplOscCommand(line);
+            const packets = this.oscMessageToSerialOscLedPackets(parsed.address, parsed.args);
+            if (!Array.isArray(packets) || packets.length === 0) {
+                throw new Error(`unsupported OSC command: ${parsed.address}`);
+            }
+
+            for (const packet of packets) {
+                await this.iiiDevice.writeBytes(packet);
+            }
+        }
+
+        return true;
+    }
+
+    encodeMextPacket(addr, cmd, payloadBytes) {
+        const payload = Array.isArray(payloadBytes) ? payloadBytes : [];
+        const packet = new Uint8Array(1 + payload.length);
+        packet[0] = ((addr & 0x0F) << 4) | (cmd & 0x0F);
+
+        for (let index = 0; index < payload.length; index += 1) {
+            packet[index + 1] = Number(payload[index]) & 0xFF;
+        }
+
+        return packet;
+    }
+
+    packRingMapLevels(levels) {
+        const packed = new Uint8Array(32);
+
+        for (let index = 0; index < 32; index += 1) {
+            const left = Number(levels[index * 2] ?? 0) & 0x0F;
+            const right = Number(levels[(index * 2) + 1] ?? 0) & 0x0F;
+            packed[index] = (left << 4) | right;
+        }
+
+        return packed;
+    }
+
+    splitBridgeLines(text) {
+        return String(text)
             .split('\n')
             .map((line) => line.replace(/\r/g, '').trim())
             .filter((line) => line.length > 0);
+    }
+
+    decodeOscPacketToLines(bytes) {
+        try {
+            const { packet } = this.readOscPacket(bytes, 0, bytes.length);
+            return this.oscPacketToLines(packet);
+        } catch {
+            return [];
+        }
+    }
+
+    oscPacketToLines(packet) {
+        if (!packet) return [];
+
+        if (packet.type === 'bundle') {
+            const lines = [];
+            for (const child of packet.elements) {
+                lines.push(...this.oscPacketToLines(child));
+            }
+            return lines;
+        }
+
+        if (packet.type !== 'message') return [];
+        return this.oscMessageToLines(packet.address, packet.args);
+    }
+
+    oscMessageToLines(address, args) {
+        const normalizedAddress = String(address || '');
+        const [firstArg] = Array.isArray(args) ? args : [];
+
+        if (normalizedAddress === '/diii/line' || normalizedAddress === '/diii/cmd' || normalizedAddress === '/diii/repl') {
+            if (firstArg == null) return [];
+            return [String(firstArg)];
+        }
+
+        if (normalizedAddress === '/diii/lines') {
+            if (firstArg == null) return [];
+
+            if (firstArg instanceof Uint8Array) {
+                return this.splitBridgeLines(new TextDecoder().decode(firstArg));
+            }
+
+            return this.splitBridgeLines(String(firstArg));
+        }
+
+        return [];
+    }
+
+    readOscPacket(bytes, offset, limit) {
+        const first = this.readOscString(bytes, offset, limit);
+        const head = first.value;
+
+        if (head === '#bundle') {
+            if (first.nextOffset + 8 > limit) {
+                throw new Error('Invalid OSC bundle timetag');
+            }
+
+            let cursor = first.nextOffset + 8;
+            const elements = [];
+
+            while (cursor < limit) {
+                const { value: elementSize, nextOffset } = this.readOscInt32(bytes, cursor, limit);
+                cursor = nextOffset;
+
+                if (elementSize < 0 || cursor + elementSize > limit) {
+                    throw new Error('Invalid OSC bundle element size');
+                }
+
+                const elementLimit = cursor + elementSize;
+                const parsed = this.readOscPacket(bytes, cursor, elementLimit);
+                if (parsed.nextOffset !== elementLimit) {
+                    throw new Error('Invalid OSC bundle element alignment');
+                }
+
+                elements.push(parsed.packet);
+                cursor = elementLimit;
+            }
+
+            return {
+                packet: { type: 'bundle', elements },
+                nextOffset: cursor
+            };
+        }
+
+        if (!head.startsWith('/')) {
+            throw new Error('Invalid OSC address');
+        }
+
+        const tag = this.readOscString(bytes, first.nextOffset, limit);
+        const typeTags = tag.value;
+        if (!typeTags.startsWith(',')) {
+            throw new Error('Invalid OSC type tags');
+        }
+
+        let cursor = tag.nextOffset;
+        const args = [];
+
+        for (const code of typeTags.slice(1)) {
+            if (code === 'i') {
+                const parsed = this.readOscInt32(bytes, cursor, limit);
+                args.push(parsed.value);
+                cursor = parsed.nextOffset;
+                continue;
+            }
+
+            if (code === 'f') {
+                const parsed = this.readOscFloat32(bytes, cursor, limit);
+                args.push(parsed.value);
+                cursor = parsed.nextOffset;
+                continue;
+            }
+
+            if (code === 's') {
+                const parsed = this.readOscString(bytes, cursor, limit);
+                args.push(parsed.value);
+                cursor = parsed.nextOffset;
+                continue;
+            }
+
+            if (code === 'b') {
+                const parsed = this.readOscBlob(bytes, cursor, limit);
+                args.push(parsed.value);
+                cursor = parsed.nextOffset;
+                continue;
+            }
+
+            if (code === 'T') {
+                args.push(true);
+                continue;
+            }
+
+            if (code === 'F') {
+                args.push(false);
+                continue;
+            }
+
+            if (code === 'N') {
+                args.push(null);
+                continue;
+            }
+
+            throw new Error(`Unsupported OSC type: ${code}`);
+        }
+
+        return {
+            packet: {
+                type: 'message',
+                address: head,
+                args
+            },
+            nextOffset: cursor
+        };
+    }
+
+    readOscInt32(bytes, offset, limit) {
+        if (offset + 4 > limit) {
+            throw new Error('OSC int32 out of bounds');
+        }
+
+        const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 4);
+        const value = view.getInt32(0, false);
+        return { value, nextOffset: offset + 4 };
+    }
+
+    readOscFloat32(bytes, offset, limit) {
+        if (offset + 4 > limit) {
+            throw new Error('OSC float32 out of bounds');
+        }
+
+        const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 4);
+        const value = view.getFloat32(0, false);
+        return { value, nextOffset: offset + 4 };
+    }
+
+    readOscString(bytes, offset, limit) {
+        if (offset >= limit) {
+            throw new Error('OSC string out of bounds');
+        }
+
+        let end = offset;
+        while (end < limit && bytes[end] !== 0) {
+            end += 1;
+        }
+
+        if (end >= limit) {
+            throw new Error('OSC string missing terminator');
+        }
+
+        const value = new TextDecoder().decode(bytes.subarray(offset, end));
+        let nextOffset = end + 1;
+        while (nextOffset % 4 !== 0) {
+            nextOffset += 1;
+        }
+
+        if (nextOffset > limit) {
+            throw new Error('OSC string alignment out of bounds');
+        }
+
+        return { value, nextOffset };
+    }
+
+    readOscBlob(bytes, offset, limit) {
+        const { value: size, nextOffset } = this.readOscInt32(bytes, offset, limit);
+        if (size < 0 || nextOffset + size > limit) {
+            throw new Error('OSC blob out of bounds');
+        }
+
+        const value = bytes.slice(nextOffset, nextOffset + size);
+        let alignedOffset = nextOffset + size;
+        while (alignedOffset % 4 !== 0) {
+            alignedOffset += 1;
+        }
+
+        if (alignedOffset > limit) {
+            throw new Error('OSC blob alignment out of bounds');
+        }
+
+        return { value, nextOffset: alignedOffset };
+    }
+
+    encodeSerialOscEventPacket(eventName, args = []) {
+        const mapped = this.mapSerialEventToOscMessage(eventName, args);
+        if (!mapped) {
+            return null;
+        }
+
+        return this.encodeOscMessage(mapped.address, mapped.args);
+    }
+
+    mapSerialEventToOscMessage(eventName, args = []) {
+        const event = String(eventName || '').trim();
+        const rawArgs = Array.isArray(args) ? args : [];
+
+        if (event === 'key') {
+            const [x, y, z] = rawArgs.map((value) => Number.parseInt(String(value), 10));
+            if (![x, y, z].every(Number.isFinite)) {
+                return null;
+            }
+
+            return {
+                address: '/grid/key',
+                args: [
+                    { type: 'i', value: x },
+                    { type: 'i', value: y },
+                    { type: 'i', value: z }
+                ]
+            };
+        }
+
+        if (event === 'enc') {
+            const [ring, delta] = rawArgs.map((value) => Number.parseInt(String(value), 10));
+            if (![ring, delta].every(Number.isFinite)) {
+                return null;
+            }
+
+            return {
+                address: '/enc/delta',
+                args: [
+                    { type: 'i', value: ring },
+                    { type: 'i', value: delta }
+                ]
+            };
+        }
+
+        if (event === 'enc_key') {
+            const [ring, z] = rawArgs.map((value) => Number.parseInt(String(value), 10));
+            if (![ring, z].every(Number.isFinite)) {
+                return null;
+            }
+
+            return {
+                address: '/enc/key',
+                args: [
+                    { type: 'i', value: ring },
+                    { type: 'i', value: z }
+                ]
+            };
+        }
+
+        if (event === 'tilt') {
+            const [n, x, y, z] = rawArgs.map((value) => Number.parseInt(String(value), 10));
+            if (![n, x, y, z].every(Number.isFinite)) {
+                return null;
+            }
+
+            return {
+                address: '/tilt',
+                args: [
+                    { type: 'i', value: n },
+                    { type: 'i', value: x },
+                    { type: 'i', value: y },
+                    { type: 'i', value: z }
+                ]
+            };
+        }
+
+        return null;
+    }
+
+    encodeOscMessage(address, args = []) {
+        if (!String(address || '').startsWith('/')) {
+            return null;
+        }
+
+        const argList = Array.isArray(args) ? args : [];
+        const tags = [','];
+        const chunks = [
+            this.encodeOscString(String(address))
+        ];
+
+        for (const arg of argList) {
+            if (!arg || typeof arg !== 'object') {
+                return null;
+            }
+
+            if (arg.type === 'i') {
+                tags.push('i');
+                chunks.push(this.encodeOscInt32(Number(arg.value) || 0));
+                continue;
+            }
+
+            if (arg.type === 'f') {
+                tags.push('f');
+                chunks.push(this.encodeOscFloat32(Number(arg.value) || 0));
+                continue;
+            }
+
+            if (arg.type === 's') {
+                tags.push('s');
+                chunks.push(this.encodeOscString(String(arg.value ?? '')));
+                continue;
+            }
+
+            return null;
+        }
+
+        chunks.splice(1, 0, this.encodeOscString(tags.join('')));
+
+        const totalSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        const output = new Uint8Array(totalSize);
+        let offset = 0;
+
+        for (const chunk of chunks) {
+            output.set(chunk, offset);
+            offset += chunk.length;
+        }
+
+        return output;
+    }
+
+    encodeOscString(value) {
+        const encoded = new TextEncoder().encode(String(value));
+        const withTerminator = new Uint8Array(encoded.length + 1);
+        withTerminator.set(encoded, 0);
+
+        const paddedLength = Math.ceil(withTerminator.length / 4) * 4;
+        const padded = new Uint8Array(paddedLength);
+        padded.set(withTerminator, 0);
+        return padded;
+    }
+
+    encodeOscInt32(value) {
+        const output = new Uint8Array(4);
+        const view = new DataView(output.buffer);
+        view.setInt32(0, Number.parseInt(String(value), 10) || 0, false);
+        return output;
+    }
+
+    encodeOscFloat32(value) {
+        const output = new Uint8Array(4);
+        const view = new DataView(output.buffer);
+        view.setFloat32(0, Number(value) || 0, false);
+        return output;
     }
 
     toggleExplorer() {
@@ -835,6 +1693,28 @@ class diiiApp {
         if (this.elements.output) this.elements.output.textContent = '';
     }
 
+    setReplControlsEnabled(enabled) {
+        const isEnabled = Boolean(enabled);
+        const controls = [
+            this.elements.connectionBtn,
+            this.elements.uploadBtn,
+            this.elements.restartBtn,
+            this.elements.bootloaderBtn,
+            this.elements.reformatBtn,
+            this.elements.clearBtn,
+            this.elements.replInput
+        ];
+
+        for (const control of controls) {
+            if (!control) continue;
+            control.disabled = !isEnabled;
+        }
+    }
+
+    setSerialOscUiMode(enabled) {
+        document.body?.classList.toggle('serialosc-mode', Boolean(enabled));
+    }
+
     handleReplInput(event) {
         const input = this.elements.replInput;
         if (!input) return;
@@ -953,6 +1833,12 @@ class diiiApp {
                 return;
             }
 
+            if (this.iiiDevice.isSerialOscMode) {
+                await this.sendSerialOscReplCommand(code);
+                this.resetReplInput();
+                return;
+            }
+
             for (const line of code.split('\n')) {
                 await this.iiiDevice.writeLine(line);
                 await this.delay(1);
@@ -1010,29 +1896,48 @@ class diiiApp {
                 this.hasConnectedThisSession = true;
                 this.autoReconnectEnabled = true;
                 this.clearAutoReconnectTimer();
-                this.setExplorerCollapsed(false);
-                const deviceType = await this.updateConnectedDeviceLabel();
+                const isSerialOscMode = this.iiiDevice.isSerialOscMode;
+                if (!isSerialOscMode) {
+                    this.setExplorerCollapsed(false);
+                }
+                const deviceType = isSerialOscMode ? null : await this.updateConnectedDeviceLabel();
 
-                if (auto) {
-                    if (deviceType) {
-                        this.outputLine(`${deviceType} reconnected.`);
-                    } else {
-                        this.outputLine('Reconnected.');
-                    }
-                } else if (deviceType) {
-                    this.outputLine(`${deviceType} connected! Ready to code.`);
-                } else {
-                    this.outputLine('Connected! Ready to code.');
+                if (isSerialOscMode && this.elements.replStatusText) {
+                    const serialOscLabel = this.getSerialOscStatusLabel();
+                    this.elements.replStatusText.textContent = serialOscLabel;
+                    this.outputLine('connected in serialosc mode, configure a websocket URL to send controls');
                 }
 
-                if (!auto) {
+                if (!isSerialOscMode) {
+                    if (auto) {
+                        if (deviceType) {
+                            this.outputLine(`${deviceType} reconnected.`);
+                        } else {
+                            this.outputLine('Reconnected.');
+                        }
+                    } else if (deviceType) {
+                        this.outputLine(`${deviceType} connected! Ready to code.`);
+                    } else {
+                        this.outputLine('Connected! Ready to code.');
+                    }
+                }
+
+                if (!auto && !isSerialOscMode) {
                     this.outputLine('Drag and drop a lua file here to auto-upload.');
                     this.outputLine('');
                 }
 
                 this.wsToSerialBridge?.start();
 
-                await this.refreshFileList();
+                if (!isSerialOscMode) {
+                    await this.refreshFileList();
+                } else {
+                    this.fileEntries = [];
+                    this.firstBadgeFileNames = new Set();
+                    this.fileFreeSpaceBytes = null;
+                    this.updateFileSpaceFooter(null);
+                    this.renderFileList();
+                }
                 return true;
             }
 
@@ -1088,15 +1993,38 @@ class diiiApp {
         if (!this.elements.connectionBtn || !this.elements.replStatusIndicator || !this.elements.replStatusText) return;
 
         if (connected) {
+            const isSerialOscMode = this.iiiDevice.isSerialOscMode;
+            this.setSerialOscUiMode(isSerialOscMode);
             this.elements.connectionBtn.textContent = 'disconnect';
             this.elements.replStatusIndicator.classList.add('connected');
-            this.elements.replStatusText.textContent = 'connected';
-            this.elements.replInput?.focus();
+            this.elements.replStatusText.textContent = isSerialOscMode ? this.getSerialOscStatusLabel() : 'connected';
+            if (this.elements.replInput) {
+                this.elements.replInput.placeholder = isSerialOscMode
+                    ? 'send osc commands live here'
+                    : 'send iii commands live here';
+            }
+            this.setReplControlsEnabled(!isSerialOscMode);
+            if (isSerialOscMode && this.elements.replInput) {
+                this.elements.replInput.disabled = false;
+            }
+            if (isSerialOscMode && this.elements.clearBtn) {
+                this.elements.clearBtn.disabled = false;
+            }
+            if (!isSerialOscMode) {
+                this.elements.replInput?.focus();
+            } else {
+                this.elements.replInput?.focus();
+            }
             this.hasConnectedThisSession = true;
             this.isManualDisconnect = false;
             return;
         }
 
+        this.setSerialOscUiMode(false);
+        this.setReplControlsEnabled(true);
+        if (this.elements.replInput) {
+            this.elements.replInput.placeholder = 'send iii commands live here';
+        }
         this.elements.connectionBtn.textContent = 'connect';
         this.elements.replStatusIndicator.classList.remove('connected');
 
@@ -1164,6 +2092,18 @@ class diiiApp {
         } catch {
             return null;
         }
+    }
+
+    getSerialOscStatusLabel() {
+        const info = this.getPortInfo(this.iiiDevice.port) || this.getPortInfo(this.selectedPort);
+        const usbProductId = Number(info?.usbProductId);
+
+        let deviceName = 'device';
+        if (usbProductId === 0x1110) {
+            deviceName = 'arc';
+        }
+
+        return `serialosc ${deviceName}`;
     }
 
     isSamePort(portA, portB, preferredInfo = null) {
@@ -1258,7 +2198,18 @@ class diiiApp {
     }
 
     handleiiiEvent(event, args) {
-        this.outputLine(`^^${event}(${args.join(', ')})`);
+        const mappedOsc = this.mapSerialEventToOscMessage(event, args);
+        const didSendOsc = this.wsToSerialBridge?.sendSerialEvent(event, args) || false;
+
+        if (mappedOsc) {
+            const isHighRateEvent = event === 'enc' || event === 'tilt';
+            if (didSendOsc && isHighRateEvent) {
+                return;
+            }
+            const oscArgString = mappedOsc.args.map((arg) => String(arg.value)).join(', ');
+            const sendSuffix = didSendOsc ? '' : ' [not sent]';
+            this.outputLine(`osc -> ${mappedOsc.address}(${oscArgString})${sendSuffix}`);
+        }
     }
 
     getUploadLines(text) {
@@ -1573,6 +2524,14 @@ class diiiApp {
             return;
         }
 
+        if (this.iiiDevice.isSerialOscMode) {
+            const empty = document.createElement('div');
+            empty.className = 'file-list-empty';
+            empty.textContent = 'reconnect in iii mode to view files';
+            this.elements.fileList.appendChild(empty);
+            return;
+        }
+
         if (this.fileEntries.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'file-list-empty';
@@ -1771,6 +2730,15 @@ class diiiApp {
 
     async refreshFileList() {
         if (!this.iiiDevice.isConnected) {
+            this.fileEntries = [];
+            this.firstBadgeFileNames = new Set();
+            this.fileFreeSpaceBytes = null;
+            this.updateFileSpaceFooter(null);
+            this.renderFileList();
+            return;
+        }
+
+        if (this.iiiDevice.isSerialOscMode) {
             this.fileEntries = [];
             this.firstBadgeFileNames = new Set();
             this.fileFreeSpaceBytes = null;
