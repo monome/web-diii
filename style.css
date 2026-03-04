@@ -57,6 +57,7 @@ body {
 
 .header-right {
     right: 10px;
+    position: absolute;
 }
 
 .title-pill {
@@ -501,6 +502,34 @@ body.is-resizing-explorer * {
 .repl-action-btn:hover {
     color: var(--interactive-selected);
     border-color: var(--interactive-medium);
+}
+
+.ws-bridge-settings-btn {
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--interactive-medium);
+    font-family: monospace;
+    font-size: 1.7rem;
+    line-height: 1;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
+.ws-bridge-settings-btn:hover {
+    color: var(--interactive-selected);
+}
+
+.ws-bridge-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 170px;
+    z-index: 30;
+}
+
+.ws-bridge-menu .file-menu-item {
+    text-transform: lowercase;
 }
 
 .repl-input-container {

@@ -192,9 +192,141 @@ class iiiConnection {
     }
 }
 
+class WsToSerialBridge {
+    constructor(options = {}) {
+        this.wsUrl = String(options.wsUrl || '').trim();
+        this.decodePayload = options.decodePayload;
+        this.writeLine = options.writeLine;
+        this.isSerialConnected = options.isSerialConnected;
+        this.onStatus = options.onStatus;
+        this.reconnectDelayMs = Number(options.reconnectDelayMs) > 0 ? Number(options.reconnectDelayMs) : 2000;
+        this.maxLinesPerMessage = Number(options.maxLinesPerMessage) > 0 ? Number(options.maxLinesPerMessage) : 128;
+
+        this.socket = null;
+        this.isRunning = false;
+        this.reconnectTimer = null;
+        this.messageChain = Promise.resolve();
+    }
+
+    hasConfiguration() {
+        return this.wsUrl.length > 0;
+    }
+
+    start() {
+        if (!this.hasConfiguration() || this.isRunning) return false;
+        this.isRunning = true;
+        this.connectSocket();
+        return true;
+    }
+
+    stop() {
+        this.isRunning = false;
+        this.clearReconnectTimer();
+
+        const socket = this.socket;
+        this.socket = null;
+        if (!socket) return;
+
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+
+        try {
+            socket.close();
+        } catch {
+            // ignore close errors
+        }
+    }
+
+    connectSocket() {
+        if (!this.isRunning || !this.hasConfiguration()) return;
+
+        try {
+            const socket = new WebSocket(this.wsUrl);
+            socket.binaryType = 'arraybuffer';
+
+            socket.onopen = () => {
+                this.emitStatus(`ws bridge connected (${this.wsUrl})`);
+            };
+
+            socket.onmessage = (event) => {
+                this.messageChain = this.messageChain
+                    .then(() => this.handleMessage(event))
+                    .catch((error) => {
+                        this.emitStatus(`ws bridge message error: ${error.message}`);
+                    });
+            };
+
+            socket.onerror = () => {
+                this.emitStatus('ws bridge socket error');
+            };
+
+            socket.onclose = () => {
+                if (!this.isRunning) return;
+                this.emitStatus('ws bridge disconnected; retrying...');
+                this.scheduleReconnect();
+            };
+
+            this.socket = socket;
+        } catch (error) {
+            this.emitStatus(`ws bridge failed to connect: ${error.message}`);
+            this.scheduleReconnect();
+        }
+    }
+
+    scheduleReconnect() {
+        if (!this.isRunning || this.reconnectTimer) return;
+
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connectSocket();
+        }, this.reconnectDelayMs);
+    }
+
+    clearReconnectTimer() {
+        if (!this.reconnectTimer) return;
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+    }
+
+    async handleMessage(event) {
+        if (!this.isRunning) return;
+        if (typeof this.decodePayload !== 'function') {
+            throw new Error('decodePayload is not configured');
+        }
+        if (typeof this.writeLine !== 'function') {
+            throw new Error('writeLine is not configured');
+        }
+        if (typeof this.isSerialConnected !== 'function' || !this.isSerialConnected()) {
+            return;
+        }
+
+        const decoded = await this.decodePayload(event.data);
+        if (!Array.isArray(decoded) || decoded.length === 0) {
+            return;
+        }
+
+        const limited = decoded.slice(0, this.maxLinesPerMessage);
+        for (const line of limited) {
+            if (!this.isSerialConnected()) {
+                break;
+            }
+            await this.writeLine(String(line));
+        }
+    }
+
+    emitStatus(message) {
+        if (typeof this.onStatus === 'function') {
+            this.onStatus(String(message));
+        }
+    }
+}
+
 class diiiApp {
     constructor() {
         this.iiiDevice = new iiiConnection();
+        this.wsToSerialBridge = null;
         this.selectedPort = null;
         this.selectedPortInfo = null;
         this.hasConnectedThisSession = false;
@@ -226,12 +358,14 @@ class diiiApp {
         this.explorerResizePointerId = null;
         this.explorerResizeStartX = 0;
         this.explorerResizeStartWidth = this.explorerWidthDefault;
+        this.isWsBridgeMenuOpen = false;
 
         this.cacheElements();
         this.bindEvents();
         this.restoreExplorerWidth();
         this.setExplorerCollapsed(true);
         this.checkBrowserSupport();
+        this.setupWsBridge();
         this.renderFileList();
 
         this.outputLine('//// welcome. connect to an iii compatible grid or arc to begin.');
@@ -240,6 +374,10 @@ class diiiApp {
     cacheElements() {
         this.elements = {
             scriptReferenceBtn: document.getElementById('scriptReferenceBtn'),
+            wsBridgeSettingsBtn: document.getElementById('wsBridgeSettingsBtn'),
+            wsBridgeMenu: document.getElementById('wsBridgeMenu'),
+            wsBridgeSetUrlBtn: document.getElementById('wsBridgeSetUrlBtn'),
+            wsBridgeDisableBtn: document.getElementById('wsBridgeDisableBtn'),
 
             splitContainer: document.getElementById('splitContainer'),
             fileExplorerPane: document.getElementById('fileExplorerPane'),
@@ -299,6 +437,14 @@ class diiiApp {
         on(this.elements.scriptReferenceBtn, 'click', () => {
             window.open('https://monome.org/docs/iii/code', '_blank');
         });
+        on(this.elements.wsBridgeSettingsBtn, 'click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.toggleWsBridgeMenu();
+        });
+        on(this.elements.wsBridgeMenu, 'click', (event) => event.stopPropagation());
+        on(this.elements.wsBridgeSetUrlBtn, 'click', () => this.openWsBridgeUrlPrompt());
+        on(this.elements.wsBridgeDisableBtn, 'click', () => this.disableWsBridgeFromMenu());
 
         this.iiiDevice.onDataReceived = (data) => this.handleiiiOutput(data);
         this.iiiDevice.onConnectionChange = (connected, error) => this.handleConnectionChange(connected, error);
@@ -317,6 +463,166 @@ class diiiApp {
         if (this.elements.connectionBtn) this.elements.connectionBtn.disabled = true;
         this.outputLine('ERROR: Web Serial API not supported in this browser.');
         this.outputLine('Please use Chrome, Edge, or Opera.');
+    }
+
+    setupWsBridge() {
+        const wsUrl = this.resolveWsBridgeUrl();
+        this.configureWsBridge(wsUrl, { announce: Boolean(wsUrl) });
+    }
+
+    configureWsBridge(wsUrl, { announce = true } = {}) {
+        const normalized = String(wsUrl || '').trim();
+
+        if (this.wsToSerialBridge) {
+            this.wsToSerialBridge.stop();
+            this.wsToSerialBridge = null;
+        }
+
+        if (!normalized) {
+            if (announce) {
+                this.outputLine('ws bridge disabled.');
+            }
+            return;
+        }
+
+        this.wsToSerialBridge = new WsToSerialBridge({
+            wsUrl: normalized,
+            decodePayload: (payload) => this.decodeBridgePayloadViaWasm(payload),
+            writeLine: (line) => this.iiiDevice.writeLine(line),
+            isSerialConnected: () => this.iiiDevice.isConnected,
+            onStatus: (message) => this.outputLine(message),
+            reconnectDelayMs: 2000,
+            maxLinesPerMessage: 128
+        });
+
+        if (announce) {
+            this.outputLine(`ws bridge configured: ${normalized}`);
+        }
+
+        if (this.iiiDevice.isConnected) {
+            this.wsToSerialBridge.start();
+        }
+    }
+
+    persistWsBridgeUrl(value) {
+        const normalized = String(value || '').trim();
+
+        try {
+            if (normalized) {
+                window.localStorage.setItem('webdiii.wsBridgeUrl', normalized);
+            } else {
+                window.localStorage.removeItem('webdiii.wsBridgeUrl');
+            }
+        } catch {
+            // ignore localStorage failures
+        }
+
+        return normalized;
+    }
+
+    openWsBridgeMenu() {
+        const menu = this.elements.wsBridgeMenu;
+        if (!menu) return;
+        menu.classList.add('open');
+        menu.setAttribute('aria-hidden', 'false');
+        this.isWsBridgeMenuOpen = true;
+    }
+
+    closeWsBridgeMenu() {
+        const menu = this.elements.wsBridgeMenu;
+        if (!menu) return;
+        menu.classList.remove('open');
+        menu.setAttribute('aria-hidden', 'true');
+        this.isWsBridgeMenuOpen = false;
+    }
+
+    toggleWsBridgeMenu() {
+        if (this.isWsBridgeMenuOpen) {
+            this.closeWsBridgeMenu();
+            return;
+        }
+        this.openWsBridgeMenu();
+    }
+
+    openWsBridgeUrlPrompt() {
+        const current = this.wsToSerialBridge?.wsUrl || this.resolveWsBridgeUrl() || '';
+        const entered = window.prompt('Set websocket bridge URL (blank disables):', current);
+        if (entered == null) {
+            this.closeWsBridgeMenu();
+            return;
+        }
+
+        const normalized = this.persistWsBridgeUrl(entered);
+        this.configureWsBridge(normalized, { announce: true });
+        this.closeWsBridgeMenu();
+    }
+
+    disableWsBridgeFromMenu() {
+        this.persistWsBridgeUrl('');
+        this.configureWsBridge('', { announce: true });
+        this.closeWsBridgeMenu();
+    }
+
+    resolveWsBridgeUrl() {
+        try {
+            const fromQuery = new URLSearchParams(window.location.search).get('ws_bridge');
+            if (fromQuery && fromQuery.trim()) {
+                return fromQuery.trim();
+            }
+        } catch {
+            // ignore query parsing failures
+        }
+
+        try {
+            const fromStorage = window.localStorage.getItem('webdiii.wsBridgeUrl');
+            if (fromStorage && fromStorage.trim()) {
+                return fromStorage.trim();
+            }
+        } catch {
+            // ignore localStorage access failures
+        }
+
+        const fromGlobal = window.WEB_DIII_WS_BRIDGE_URL;
+        if (typeof fromGlobal === 'string' && fromGlobal.trim()) {
+            return fromGlobal.trim();
+        }
+
+        return '';
+    }
+
+    async decodeBridgePayloadViaWasm(payload) {
+        const bridge = window.WebDiiiWasmBridge;
+        if (!bridge || typeof bridge.decodeWsToLines !== 'function') {
+            return this.decodeBridgePayloadFallback(payload);
+        }
+
+        const decoded = await bridge.decodeWsToLines(payload);
+        if (!Array.isArray(decoded)) {
+            throw new Error('WASM bridge decoder must return string[]');
+        }
+
+        return decoded.map((line) => String(line));
+    }
+
+    async decodeBridgePayloadFallback(payload) {
+        let text = '';
+
+        if (typeof payload === 'string') {
+            text = payload;
+        } else if (payload instanceof Blob) {
+            text = await payload.text();
+        } else if (payload instanceof ArrayBuffer) {
+            text = new TextDecoder().decode(payload);
+        } else if (ArrayBuffer.isView(payload)) {
+            text = new TextDecoder().decode(payload.buffer);
+        } else {
+            text = String(payload ?? '');
+        }
+
+        return text
+            .split('\n')
+            .map((line) => line.replace(/\r/g, '').trim())
+            .filter((line) => line.length > 0);
     }
 
     toggleExplorer() {
@@ -724,6 +1030,8 @@ class diiiApp {
                     this.outputLine('');
                 }
 
+                this.wsToSerialBridge?.start();
+
                 await this.refreshFileList();
                 return true;
             }
@@ -762,6 +1070,8 @@ class diiiApp {
             this.autoReconnectEnabled = false;
             this.clearAutoReconnectTimer();
         }
+
+        this.wsToSerialBridge?.stop();
 
         await this.iiiDevice.disconnect();
         this.refreshFileList();
@@ -1236,6 +1546,14 @@ class diiiApp {
     }
 
     handleDocumentClick(event) {
+        if (this.isWsBridgeMenuOpen) {
+            const clickedSettingsButton = event.target?.closest('#wsBridgeSettingsBtn');
+            const clickedMenu = event.target?.closest('#wsBridgeMenu');
+            if (!clickedSettingsButton && !clickedMenu) {
+                this.closeWsBridgeMenu();
+            }
+        }
+
         if (!this.openMenuFile) return;
         if (event.target?.closest('.file-row')) return;
         this.openMenuFile = null;
