@@ -1052,7 +1052,12 @@ class diiiApp {
 
         await this.delay(100);
         await this.iiiDevice.writeLine('^^w');
-        await this.delay(100);
+
+        // Sync: wait for the device to finish ^^w processing (compilation +
+        // LittleFS flash write/erase) before issuing any further commands.
+        // A fixed delay is unreliable because LFS block compaction can take
+        // longer than any reasonable constant.
+        await this.executeLuaCapture('print(1)');
     }
 
     async uploadTextAsScript(name, text, options = {}) {
