@@ -15,6 +15,7 @@ class iiiConnection {
         this.lineBuffer = '';
         this.partialLineFlushTimer = null;
         this.partialLineFlushDelayMs = 40;
+        this.partialLineFlushEnabled = true;
         this.onDataReceived = null;
         this.onConnectionChange = null;
         this._textEncoder = new TextEncoder();
@@ -166,6 +167,8 @@ class iiiConnection {
     }
 
     schedulePartialLineFlush() {
+        if (!this.partialLineFlushEnabled) return;
+
         this.clearPartialLineFlush();
 
         this.partialLineFlushTimer = setTimeout(() => {
@@ -216,6 +219,9 @@ class diiiApp {
         this.openMenuFile = null;
         this.isExplorerCollapsed = true;
         this.fileRunQueue = Promise.resolve();
+        this.fileRefreshQueue = Promise.resolve();
+        this.fileRefreshInFlight = false;
+        this.fileRefreshRequested = false;
         this.pendingSuppressedOutputLines = [];
         this.lastUploadedScript = null;
         this.explorerWidthStorageKey = 'webdiii.explorerWidth';
@@ -281,7 +287,7 @@ class diiiApp {
         on(this.elements.replInput, 'keydown', (e) => this.handleReplInput(e));
         on(document, 'keydown', (e) => this.handleGlobalShortcuts(e));
         on(this.elements.toggleExplorerBtn, 'click', () => this.toggleExplorer());
-        on(this.elements.refreshExplorerBtn, 'click', () => this.refreshFileList());
+        on(this.elements.refreshExplorerBtn, 'click', () => this.requestFileListRefresh());
         on(this.elements.explorerResizer, 'pointerdown', (e) => this.startExplorerResize(e));
         on(this.elements.explorerResizer, 'keydown', (e) => this.handleExplorerResizerKeydown(e));
         on(this.elements.uploadBtn, 'click', () => this.openUploadPicker());
@@ -724,7 +730,7 @@ class diiiApp {
                     this.outputLine('');
                 }
 
-                await this.refreshFileList();
+                await this.requestFileListRefresh();
                 return true;
             }
 
@@ -764,7 +770,7 @@ class diiiApp {
         }
 
         await this.iiiDevice.disconnect();
-        this.refreshFileList();
+        this.requestFileListRefresh();
         this.outputLine('');
         this.outputLine('disconnected');
         this.outputLine('');
@@ -1052,7 +1058,12 @@ class diiiApp {
 
         await this.delay(100);
         await this.iiiDevice.writeLine('^^w');
-        await this.delay(100);
+
+        // Sync: wait for the device to finish ^^w processing (compilation +
+        // LittleFS flash write/erase) before issuing any further commands.
+        // A fixed delay is unreliable because LFS block compaction can take
+        // longer than any reasonable constant.
+        await this.executeLuaCapture('print(1)');
     }
 
     async uploadTextAsScript(name, text, options = {}) {
@@ -1067,7 +1078,7 @@ class diiiApp {
             this.outputLine(`Uploading ${name}...`);
             await this.sendScriptTextToiii(name, text);
             if (refreshList) {
-                await this.refreshFileList();
+                await this.requestFileListRefresh();
             }
         } catch (error) {
             this.outputLine(`Upload error: ${error.message}`);
@@ -1221,7 +1232,7 @@ class diiiApp {
             });
             await this.executeLua(`fs_run_file("lib.lua")`);
             await this.executeLua(`fs_run_file(${this.luaQuote(script.name)})`);
-            this.refreshFileList().catch((error) => {
+            this.requestFileListRefresh().catch((error) => {
                 this.outputLine(`File list error: ${error.message}`);
             });
         } catch (error) {
@@ -1434,21 +1445,29 @@ class diiiApp {
             };
         });
 
-        await this.iiiDevice.writeLine(`print(${this.luaQuote(beginToken)})`);
+        this.iiiDevice.partialLineFlushEnabled = false;
+        this.iiiDevice.clearPartialLineFlush();
 
-        const lines = Array.isArray(commands)
-            ? commands
-            : String(commands).split('\n');
+        try {
+            await this.iiiDevice.writeLine(`print(${this.luaQuote(beginToken)})`);
 
-        for (const rawLine of lines) {
-            const line = String(rawLine).trim();
-            if (!line) continue;
-            await this.iiiDevice.writeLine(`${line}`);
+            const lines = Array.isArray(commands)
+                ? commands
+                : String(commands).split('\n');
+
+            for (const rawLine of lines) {
+                const line = String(rawLine).trim();
+                if (!line) continue;
+                await this.iiiDevice.writeLine(`${line}`);
+            }
+
+            await this.iiiDevice.writeLine(`print(${this.luaQuote(endToken)})`);
+
+            return await resultPromise;
+        } finally {
+            this.iiiDevice.partialLineFlushEnabled = true;
+            this.iiiDevice.schedulePartialLineFlush();
         }
-
-        await this.iiiDevice.writeLine(`print(${this.luaQuote(endToken)})`);
-
-        return resultPromise;
     }
 
     async refreshFileList() {
@@ -1486,6 +1505,33 @@ class diiiApp {
             this.updateFileSpaceFooter(null);
             this.outputLine(`File list error: ${error.message}`);
         }
+    }
+
+    requestFileListRefresh() {
+        this.fileRefreshRequested = true;
+
+        this.fileRefreshQueue = this.fileRefreshQueue
+            .catch(() => {})
+            .then(async () => {
+                if (this.fileRefreshInFlight || !this.fileRefreshRequested) {
+                    return;
+                }
+
+                this.fileRefreshRequested = false;
+                this.fileRefreshInFlight = true;
+
+                try {
+                    await this.refreshFileList();
+                } finally {
+                    this.fileRefreshInFlight = false;
+                }
+
+                if (this.fileRefreshRequested) {
+                    await this.requestFileListRefresh();
+                }
+            });
+
+        return this.fileRefreshQueue;
     }
 
     getFirstRunFileTargetFromInit(initContent) {
@@ -1560,7 +1606,7 @@ class diiiApp {
         try {
             await this.executeLuaCapture(`first(${this.luaQuote(fileName)})`);
             this.outputLine(`${fileName} will now run at at startup`);
-            await this.refreshFileList();
+            await this.requestFileListRefresh();
         } catch (error) {
             this.outputLine(`First error: ${error.message}`);
         }
@@ -1641,7 +1687,7 @@ class diiiApp {
         try {
             await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(fileName)})`);
             this.outputLine(`Deleted ${fileName}`);
-            await this.refreshFileList();
+            await this.requestFileListRefresh();
         } catch (error) {
             this.outputLine(`Delete error: ${error.message}`);
         }
@@ -1706,7 +1752,7 @@ class diiiApp {
         try {
             await this.executeLuaCapture('fs_reformat()');
             this.outputLine('Filesystem reformatted.');
-            await this.refreshFileList();
+            await this.requestFileListRefresh();
         } catch (error) {
             this.outputLine(`Reformat error: ${error.message}`);
         }
