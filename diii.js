@@ -200,6 +200,8 @@ class diiiApp {
         this.iiiDevice = new iiiConnection();
         this.selectedPort = null;
         this.selectedPortInfo = null;
+        this.deviceLabelsByPort = new WeakMap();
+        this.connectedDeviceLabel = null;
         this.hasConnectedThisSession = false;
         this.pendingConnectAttemptType = null;
         this.autoReconnectEnabled = false;
@@ -307,7 +309,7 @@ class diiiApp {
         });
 
         this.iiiDevice.onDataReceived = (data) => this.handleiiiOutput(data);
-        this.iiiDevice.onConnectionChange = (connected, error) => this.handleConnectionChange(connected, error);
+        this.iiiDevice.onConnectionChange = (connected, error, detail) => this.handleConnectionChange(connected, error, detail);
 
         if ('serial' in navigator) {
             navigator.serial.addEventListener('connect', (event) => this.handleSerialPortConnect(event));
@@ -696,11 +698,16 @@ class diiiApp {
                 }
             }
 
+            this.connectedDeviceLabel = reconnectPort
+                ? this.getCachedDeviceLabel(reconnectPort)
+                : null;
+
             let connected = await this.iiiDevice.connect(reconnectPort);
 
             if (!connected && this.selectedPort && !auto) {
                 this.selectedPort = null;
                 this.selectedPortInfo = null;
+                this.connectedDeviceLabel = null;
                 connected = await this.iiiDevice.connect();
             }
 
@@ -711,7 +718,13 @@ class diiiApp {
                 this.autoReconnectEnabled = true;
                 this.clearAutoReconnectTimer();
                 this.setExplorerCollapsed(false);
-                const deviceType = await this.updateConnectedDeviceLabel();
+                const cachedDeviceType = this.getCachedDeviceLabel(this.selectedPort);
+                if (cachedDeviceType) {
+                    this.connectedDeviceLabel = cachedDeviceType;
+                    this.elements.replStatusText.textContent = cachedDeviceType;
+                }
+
+                const deviceType = cachedDeviceType || await this.updateConnectedDeviceLabel();
 
                 if (auto) {
                     if (deviceType) {
@@ -752,14 +765,38 @@ class diiiApp {
         try {
             const lines = await this.executeLuaCapture('print(device_id())');
             const deviceType = lines.map((line) => String(line).trim()).find((line) => line.length > 0);
-            this.elements.replStatusText.textContent = deviceType
-                ? deviceType
-                : 'connected';
-            return deviceType || null;
+
+            if (deviceType) {
+                this.cacheDeviceLabel(deviceType, this.iiiDevice.port);
+                this.connectedDeviceLabel = deviceType;
+                this.elements.replStatusText.textContent = deviceType;
+                return deviceType;
+            }
         } catch {
-            this.elements.replStatusText.textContent = 'connected';
+            // fall back to cached label below
+        }
+
+        const cachedDeviceType = this.getCachedDeviceLabel(this.iiiDevice.port);
+        this.connectedDeviceLabel = cachedDeviceType;
+        this.elements.replStatusText.textContent = cachedDeviceType || 'connected';
+        return cachedDeviceType;
+    }
+
+    cacheDeviceLabel(deviceLabel, port) {
+        const normalizedLabel = String(deviceLabel || '').trim();
+        if (!normalizedLabel || !port) {
+            return;
+        }
+
+        this.deviceLabelsByPort.set(port, normalizedLabel);
+    }
+
+    getCachedDeviceLabel(port) {
+        if (!port) {
             return null;
         }
+
+        return this.deviceLabelsByPort.get(port) || null;
     }
 
     async disconnect(manual = true) {
@@ -786,7 +823,7 @@ class diiiApp {
         if (connected) {
             this.elements.connectionBtn.textContent = 'disconnect';
             this.elements.replStatusIndicator.classList.add('connected');
-            this.elements.replStatusText.textContent = 'connected';
+            this.elements.replStatusText.textContent = this.connectedDeviceLabel || 'connected';
             this.elements.replInput?.focus();
             this.hasConnectedThisSession = true;
             this.isManualDisconnect = false;
@@ -1032,7 +1069,6 @@ class diiiApp {
 
         const now = Date.now();
         this.pendingSuppressedOutputLines = this.pendingSuppressedOutputLines.filter((entry) => entry.expiresAt > now);
-
         const matchIndex = this.pendingSuppressedOutputLines.findIndex((entry) => entry.line === line);
         if (matchIndex === -1) return false;
 
@@ -1044,7 +1080,6 @@ class diiiApp {
         const lines = this.getUploadLines(text);
 
         await this.executeLuaCapture(`fs_remove_file(${this.luaQuote(fileName)})`);
-
         // Match diii upload protocol:
         // ^^s, <filename>, ^^f, ^^s, <file lines>, ^^w
         await this.openAndSelectRemoteFile(fileName);
